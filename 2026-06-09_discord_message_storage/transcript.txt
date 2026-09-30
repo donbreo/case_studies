@@ -1,0 +1,228 @@
+There is a decision that Discord made early on that almost no messaging company ever makes and it's
+shaped every single hard engineering problem they've had to solve ever since. They decided to never
+delete your messages. Now, let's talk about what that means. Most chat products are built around the
+idea that messages are ephemeral. You scroll past them, they age out and at some point the old ones
+get archived to cold storage or they quietly get dropped. But Discord went the other way. Every
+message you've ever sent and every server and every channel going back to the day that you joined,
+it's all still there. All of it, instantly searchable. And it's all scrollable back to the very
+first message in a channel from years ago. And we're going to discuss how Discord does all of that
+today in this video. And in this video, I have a bunch of diagrams to take you through. So, please
+stick around till the end so that you get a complete idea of how Discord works at scale and how it
+stores all of the messages up until now. It's going to be a very visual video, so you'll get to
+learn a lot. Now, this decision that they took is not a small product detailed. That single decision
+means Discord isn't running a messaging system, they're running one of the largest continuously
+growing databases on the planet. They crossed a trillion stored messages many years ago and they're
+adding billions of more messages every single day and none of it ever gets thrown away. So, in this
+video, we're going to walk through how Discord actually stores and serves all of that. And honestly,
+the story is way better than you would expect because it's not a story about getting it right. It's
+a story about getting it wrong twice and the second time nearly taking the whole company down.
+Because that one decision, which is to keep everything forever instantly available, cascades into
+every other problem they've had to solve. And the main lesson of this video is that the database
+that gets you to a billion rows is almost never the database that survives at a trillion. The access
+pattern that looks fine at a small scale becomes the thing that kills you at large scale. And by the
+end of this you'll understand why messages are one of the hardest things in the world to store at
+scale. Now, a bit of context first. Discord launched in 2015, and in the very early days, their
+messages lived inside MongoDB. It was just one replica set, and it's a completely normal choice.
+It's what you reach for when you're small, because it's flexible, it's fast to build on, and it
+worked fine right up until it did not. Now, by the end of 2015, they were storing around 100 million
+messages, and MongoDB started showing the strain. The data and the index stopped fitting in memory,
+and latencies turned everything unpredictable. They had hit the wall that every fast-growing product
+hits, which is the database that got them off the ground couldn't carry the weight anymore. So, in
+2017, they made their first big migration. They moved messages off MongoDB and onto Cassandra. And
+on paper, this was the textbook correct decision, because Cassandra is built exactly for this, which
+is massive write volume, data that only ever grows, linear scalability where you add nodes to add
+capacity, and no single point of failure. If you had asked any distributed systems engineer in 2017,
+"What do you store trillions of append-only messages in?" the answer was Cassandra. Discord did the
+right thing, by the book. And they started with 12 Cassandra nodes storing billions of messages, and
+for a while, it was exactly what they needed. Now, to understand everything that comes next, you
+need to understand how they modeled a message in Cassandra, because in a system like this, the data
+model is the schema and the access pattern fused together. So, you design the storage around the
+exact question you're going to ask it. And the question that Discord asks constantly is, "Give me
+the most recent messages in this channel." So, that's what they've optimized for. Messages get
+partitioned by channel, and every message in a given channel, bucketed by time, stored together, and
+sorted so the newest are easy to grab. The partition key is the channel. The clustering is by
+message ID, which encodes time, so it's one query, one partition, newest messages out. It's quite
+clean. So, if you look at the design, it's very simple. And for the common case, which is open a
+channel, series of messages, this design is perfect. But that exact same design, which was the thing
+that made the common case fast, was also setting up a trap for them. But first, let's talk about
+what this model unlocked for them first, because there was a great upside to it. Now, the first
+benefit was co-location, because every message in a channel lives in the same partition. And the
+single most common operation in the entire product, which is load a channel, is just a single query
+to a single partition on a single node. No fan out and no joining across machines. And the thing
+that users do 10,000 times a second is the cheapest thing the database does. The second benefit was
+append-friendly writes, because messages in Discord only ever get added. Because you almost never
+update an old message, and you never delete one. Cassandra is built around exactly this shape, where
+writes are cheap appends, and the system never has to do expensive in-place rewrites. The write
+pattern of the product matched the write pattern the database was best at. The third benefit was
+linear scaling. So, when you need more capacity, you just add nodes, and the data redistributes, and
+the cluster gets bigger, and in theory, you just keep doing that forever. So, there's no re-
+architecting, no rewriting the data model, we just have more machines. So, as Discord grew, they
+grew the cluster, which was 12 nodes became dozens and dozens kept towards 100 and beyond. So, these
+three things that we talked about in the three diagrams that I just showed you, the five, six, and
+seven diagrams, which was reads, cheap appends, and scale by adding nodes are exactly why Cassandra
+was right call for Discord. And for years, it did the job. But every architecture has a cost, and
+the cost of this one turned out to be one of the nastiest, most famous failure modes in distributed
+databases. What we're about to do now is discuss what the model costs us. And to see it, you have to
+look at the assumption baked into the design. This whole thing we talked about assumed that traffic
+spreads out roughly evenly across channels. And if every channel gets a moderate amount of activity,
+then every partition is about the same size, and every node carries about the same load. And the
+cluster hums along balanced. But that's not how Discord actually gets used. Real traffic is wildly
+violently uneven. Most channels are quiet, but then there are a tiny handful of channels like a
+massive public server during a game launch or a celebrity's community or a viral moment. They get
+absolutely hammered. And then there'll be millions of people all reading and writing to the same
+channel at the same time. And if you remember I told you about the data model, which was everything
+in a channel lives in one partition on the node that owns the partition, and that actually has a
+problem. But before we go deeper into that, I want to take a few seconds to tell you about a cohort
+that I teach personally to 15 to 20 senior engineers every few months. And it's called the AlgoRock
+cohort. We cover advanced system design and architecture for the post-AI world. Usually the people
+who attend are senior folks like SREs, platform engineers, principal engineers, enterprise and
+solution architects, and VP engineering. So there are people all the way from five years of
+experience all the way to 26 years of experience. And this is a great way to learn from actual
+production case studies. The next cohort is in July. I want you to go to this website algorock.io
+and check out all these topics that we're going to cover. We'll cover modern systems like how
+Anthropic handles LLMs and how Hugging Face handles so many sandboxes for AI models and how Together
+AI hosts so many open-source models at scale. It's going to be an intensive 12-weeks program. If you
+like the topics that you see, I want you to fill up the form that opens up and hit the reserve or
+enroll button. Once you fill the [clears throat] form, I'll check to see if you're a great fit and
+we'll set up a call with you. The live cohort, which is personally taught by me, is about $2,500.
+But if you just wanted access to the pre-recorded videos, that's $800. Now, if you're early in your
+career and you're beginning right now and you're new to engineering, please don't fill up the form.
+This cohort is not relevant to you. All right, now back to the video. So before we went on our
+break, we were talking about the problem with our data model. So, what happened with the data model
+was that if one channel went viral, all of that traffic landed on one partition on one node. And
+that node gets buried while its neighbors are sitting nearly idle. And this is called as a hot
+partition. That's exactly the failure that the simple fast data model that we had was setting them
+up for. But the problem is that it gets worse because hot partitions don't fail quietly. A hot node
+slows down and because it's slow, requests will start piling up and they'll start timing out. And
+then clients will start retrying which adds even more load to the node that's already drowning. So,
+the latency spike spreads to anything sharing resources with it. So, one hot channel could cascade
+into latency across the whole system and these cascades were unpredictable. Discord's engineers
+would get paged for a system-wide slow down that traced back to a single channel having a big
+moment. And then there was a second problem which was quieter but still as deadly which was
+Cassandra is written in Java and Java has garbage collection. And at Discord's scale, the garbage
+collector would periodically freeze a node for long pauses to clean up memory and those pauses
+caused their own latency spikes on top of the already hot partition spikes. So, two independent
+sources of unpredictable stalls stacked on each other. And this is the real cost of the
+architecture. The data model that made the common case beautifully fast made the worst case
+catastrophic and the worst case happened every single day because at Discord's scale, somewhere a
+channel is always going viral. So, this spent enormous effort baby sitting this. But by the time it
+got really bad, they were already running a single cluster of 177 Cassandra nodes and a big chunk of
+the team's life was just firefighting this. The thing that was supposed to scale linearly had turned
+into a constant operational emergency. Okay, now this is where Discord did something genuinely smart
+and it's the part that most people miss. So, pay attention here. Now, their first instinct could
+have been just swap this database. But they realized that the database was not the only problem. The
+problem was also how traffic hit the database. So, even a perfect database would struggle if a
+million users all demanded the same channels data at the same instant. So, before they touched the
+storage engine, they put something in front of it. They built a new layer, they called it the data
+services layer, sitting between their API and the databases. And the key trick this layer does is
+something called request coalescing. So, I'll explain the idea to you. So, imagine a hugely popular
+channel and 10,000 people open it in the same instant. Now, without coalescing, that's 10,000
+identical queries slamming into the same hot partition, which is the exact thing that kills a node.
+But with coalescing, the data services layer notices that all these requests are asking for the same
+thing. So, it sends one query to the database, waits for the answer, and fans that single answer
+back to all 10,000 waiting requests. Now, the way they route this matters as well. So, requests get
+routed to data service instances using consistent hashing on something like the channel ID. So,
+every request for a given channel goes to the same data service instance, which is precisely what
+makes coalescing possible because all the requests for the hot channel arrive in the same place
+where they can be merged. And here's the important detail. They wrote this layer, this entire layer
+that we're talking about, in Rust, not Java and not Golang, Rust specifically because they were so
+burned by Java's garbage collection that they wanted a language with no garbage collector at all.
+Where they could finally control concurrency precisely and never eat a random GC pause in the middle
+of a hot path. So, the operational payoff was huge. Uh channel going viral now no longer meant that
+a thousandfold spike would be there in the database queries. It means roughly one query now, right?
+So, no matter how many people are watching, because the data services layer absorbs the duplication,
+there is no problem because all these queries just become one query to the database. And the data
+services layer, which was built in Rust, handles everything. So, the single worst trigger of hot
+partitions, which is many people demanding the same data at once, here gets flattened out before it
+ever reaches the database. And this is what good engineering under pressure looks like because they
+didn't blame the database, they separated two different concerns, which was how do we store this to
+how does traffic read storage. And they solved the traffic problem independently, and that's the
+move. All right, so you understood that they've got something called as a coalescing layer in front,
+and this helped them. But underneath it, they still had Cassandra. So, 177 nodes of Cassandra. So,
+still garbage collecting because Cassandra is built in Java, and still prone to hot partitions when
+coalescing was not enough. The firefighting got better, but it did not stop. So, the problem is that
+the data kept growing. So, billions of new messages a day every day, and none of them ever deleted.
+And the cluster kept getting bigger, and a bigger Cassandra cluster meant more nodes to babysit,
+more garbage because more partitions that could go hot. They were scaling the problem, but not
+solving it. So, they made the call that's extremely terrifying at their scale. They decided to
+replace the database entirely, and they moved trillions of messages off of Cassandra onto something
+else while the system stayed live the whole time, which meant billions of people relying on it, and
+not a single second of downtime was acceptable. And that something else was ScyllaDB. And the reason
+ScyllaDB is interesting is because it's basically Cassandra, but reimagined to fit exactly Discord's
+two problems. It speaks the same query language, so the data model could come across without a total
+redesign, but under the hood, it's written in C++. or Java. So, there's no garbage collector, and
+that entire category of random freeze-up pauses just disappears. And it uses a shard-per-core
+architecture where each CPU core owns its own slice of data and memory, which gives much more
+consistent performance under load, and helps tame the hot partition problem. So, this was the two-
+pronged solution. A Rust coalescing layer to stop duplicate traffic from ever hitting the database,
+and a C++ database underneath that that doesn't stall and handles uneven load far more gracefully.
+So, two different responses, the two different parts of the same scaling problem. Now, let's talk
+about how they actually pulled off the migration because it's actually very wild. So, the question
+is, how do you move trillions of live messages from one database to another without anyone noticing?
+The strategy starts with dual rights. They flip on a mode where every new incoming message gets
+written to both Cassandra and Scylla at the same time. From that moment forward, the new database is
+staying current with all the new data automatically and that handles the present. The hard part is
+the past. The trillions of historical messages already sitting in Cassandra that have to be copied
+across. And their first plan for the backfill was to use ScyllaDB's off-the-shelf migration tool,
+which was built on Spark. It worked, it was stable, but it was slow. So, when they did the math, the
+full backfill was going to take about 3 months. And 3 months is a long time to keep running the
+Cassandra cluster they were desperate to get rid of with all of its operational risk still live. So,
+they did something a lot of teams would not do. They wrote their own migrator in Rust, extending the
+same data services framework they had already built. This custom migrator read large contiguous
+ranges of data out of Cassandra, wrote them into ScyllaDB with high concurrency. And this is the
+clever operational bit. It checkpointed its progress into a small local database so it could resume
+exactly where it left off if anything failed, not starting over. And the result was staggering. The
+custom migrator hit a throughput of around 3.2 million messages per second and the backfill that was
+going to take 3 months finished in about 9 days. Then in May '22, they flipped the switch. ScyllaDB
+became the primary store for Discord messages. And the before and after is the whole argument for
+the project in a single set of numbers. The cluster went from 177 Cassandra nodes down to just 72
+ScyllaDB nodes, which was fewer than half even though each ScyllaDB node was holding more than twice
+the data. And tail end read latencies that had been swinging unpredictably from 40 to 125
+milliseconds dropped to a consistent 50 milliseconds and worst case write latencies came down to
+around just 5 milliseconds. And maybe the most important, the constant firefighting stopped and the
+hot partitions and the garbage collection pauses that had defined their on-call life just were not a
+daily emergency anymore. So now we look at what all of this cost them because as senior engineers we
+don't get to skip the trade-offs. So the decision to never delete anything, which was a decision
+this whole video hangs on, is not free. It means your storage only ever grows forever. It means
+you're permanently paying to keep that data statistically almost no one will ever read. The vast
+majority of message reads are recent messages, but they're holding on to years of history at full
+availability anyway because that history is part of the product promise. And the deeper cost is that
+the data model was effectively locked in. Once you've partitioned trillions of messages by channel,
+that partitioning scheme is your reality forever. It's why moving databases meant carrying the same
+model across to a Cassandra-compatible system rather than rethinking it from scratch. So the shape
+of the data chosen in 2017 was still dictating their options years later. So the most consequential
+decision had the longest shadow. There's also the ongoing cost of the layers they had to build. The
+data services layer is now a critical piece of infrastructure they own and maintain forever. Request
+coalescing, consistent hash routing, the custom rust tooling, that's all complexity that exists
+specifically because of the storage decisions underneath it. Every powerful piece of infrastructure
+has an ongoing tax and you pay it at every layer forever. But for Discord, the bet paid off. The
+keep everything instantly available promise is a real part of why people love the product. They
+decided the flexibility and the user experience were worth paying for at every layer below. So let's
+now take a look at all the takeaways from this video. So there are five things quickly. The first is
+the database that gets you to a billion rows is really the one that survives at a trillion. MongoDB
+was right for early Discord, but Cassandra was right for scaling and Discord, but neither was right
+forever. This is normal because they eventually had to go to Scylla and DB. Second is that your
+worst case, not your average case, is what defines your architecture at scale. Because at Discord
+scale, the rare event happens constantly somewhere all the time. Third, sometimes the fix is not the
+database. It's what sits in front of it. Because Discord's single biggest relief didn't come from
+changing storage, it came from the data services layer that stopped duplicate traffic from ever
+reaching the storage. Fourth, your implementation language is an architectural decision when you're
+at the limits. Choosing Rust to escape garbage collection, choosing a C++ database for critical
+latency, and at most companies, these are details. But at Discord scale, they were actually load-
+bearing decisions. Fifth, a migration is a first-class engineering problem. It's not an
+afterthought. The custom Rust migrator turned 3 months into 9 days. All right, this is the kind of
+thinking that we go deep on in the AlgoRock cohort. We learn from real systems and real trade-offs.
+So, if you like this video, you should check out algorock.io. Okay, so let's wrap it up. Discord
+story it was just one decision, which was keep every message forever instantly available, and it led
+to a decade of engineering that was forced to own it. So, that decision took them from MongoDB to
+Cassandra to 177 node firefight to a Rust coalescing layer, and finally to a 9-day migration onto
+Scylla DB that cut their cluster in half and made the pain stop. But the lesson is actually bigger
+than Discord. The lesson is that at scale, the access pattern is the architecture. The way your data
+gets read and written, and especially how unevenly it gets read and written, will dictate every
+storage decision that you make. Uh you might be able to solve your common case really fast, and you
+will feel like a genius at the time, but it's only up until the worst case actually shows up. And at
+a billion users, the worst case always shows up. So, when you're designing your real system at
+scale, don't just ask what the average request looks like. Ask what the single most extreme request
+will look like. Now, making these deep dives and all of these diagrams takes a lot of work. So,
+please don't forget to subscribe to this channel. Make sure you share this video with a lot of
+friends. Like this video. Comment if you have any questions, and I'll see you in the next video.

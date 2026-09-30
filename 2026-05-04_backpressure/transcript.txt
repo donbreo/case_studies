@@ -1,0 +1,243 @@
+If you've ever used Kafka, RabbitMQ, or any other popular messaging queue, you've been dealing with
+backpressure whether you realize it or not. Every time your Kafka consumer lag grows, that's a
+backpressure signal. Every time RabbitMQ starts rejecting messages because its memory limit is hit,
+that's also backpressure. And every time your API returns a 429 too many requests error, that's also
+backpressure. And yet most engineers still treat these as isolated incidents and they think, "Oh,
+the consumer is slow. Let's just add more consumers." Or "Oh, the queue is full. Let's just make it
+bigger." Without understanding the underlying concept. You're treating symptoms instead of the
+disease. So, backpressure is one of those concepts that once you truly get it, changes how you think
+about every system that you build. It's the difference between building a system that degrades
+gracefully under load and building one that falls over unpredictably. And honestly, it's one of
+those topics that separates an engineer who just uses distributed systems from one who truly
+understands them. So, what exactly is backpressure? Well, think of it like plumbing. If you have a
+pipe and the water is flowing faster than the drain can handle, the pipe fills up and eventually it
+overflows or bursts. In software, the pipe is a queue or a buffer and the water is the incoming
+requests or events. And the drain is your consumer or processor. If the data comes in faster than it
+goes out, there will be a problem. Now, in case you didn't understand this plumbing example and you
+didn't understand the queue, buffer, and requests, and drain, and consumer examples, it's completely
+all right. This whole video is actually just focused on helping you to understand the backpressure
+concept. Now, here's everything that we're going to cover in this video. This is the mind map of the
+entire video. Think of backpressure as having four different layers. The first layer is
+understanding the problem. What happens when producers are faster than consumers and why just make
+the queue bigger does not solve anything. The second layer is detection. How do you know you're
+overloaded before things break? What signals should you be watching for? The third layer is the
+response. Once you've detected overload, what do you actually do about it? This is when bounded
+queues, load sharing, and priority tiers come in. And the fourth layer is propagation. How does the
+backpressure signal travel backwards through your system so that the source of the traffic actually
+slows down? This is where we look at the HTTP 429 error, the Kafka consumer pause resume, and
+circuit breakers. By the end of this video, you'll understand the full picture, and the next time
+you see Kafka consumer lag growing or your API returning 429s, you'll know exactly what's happening
+and what to do about it. Now, this video is part of the intermediate system design series. In case
+you're preparing for a system design interview, there's another playlist that I want you to check
+out. It's called the system design for beginners playlist that has more than 50 videos. And then
+this intermediate system design playlist is what I'm building now, and it's also going to have more
+than 20 videos. So, make sure you binge-watch both of these playlists, and once you've done that,
+you'll understand system design better than 99% of the people on the planet. All right, let's start
+with the core problem. You have a producer, and let's say it's your API server receiving user
+requests, and you have a consumer. Let's say it's a service that processes those payments. The
+producer generates work at about 10,000 events per second, whereas the consumer can handle only
+about 2,000 events per second. And that gap, the difference between how fast work comes in to how
+fast it gets done, is growing your queue by about 8,000 events per second. Now, most systems handle
+this by putting a queue in between, and the queue works great as long as the overload is temporary.
+A burst of traffic for 30 seconds, the queue absorbs it, the consumer catches up in a minute, and
+everyone's happy. But what if this overload is not temporary? What if it lasts an hour? Your queue
+now has close to 30 million events in it. It's consuming gigabytes of memory, and at some point, the
+machines run out of RAM and the processes get killed. That's what happens when your system has no
+back pressure mechanism. The queue grows without bound until the machine can't handle it anymore.
+And it gets worse. When that process gets killed, the queue is gone. Those millions of events, lost.
+Unless you're using a persistent queue like Kafka. But even then, your consumer is now hours behind.
+The downstream effects escalate and cascade. Users see stale data, payments are delayed,
+notifications don't fire. And this is the problem that back pressure solves. Not by making the
+queues bigger, because that just delays the crash further, but by controlling the flow of data, so
+the system never accepts more than it can handle. There are really three things that a system can do
+when it's overwhelmed. The first is absorb. Just keep accepting work and hope you can catch up. This
+is what unbounded queues do. It works until it doesn't, and when it fails, it fails
+catastrophically. The second is drop. When you're full, reject incoming work. This prevents the
+crash, but if you drop silently without telling anyone, you create a different problem. The producer
+doesn't know its work was lost. You find out weeks later when a customer says, "Hey, where's my
+order?" But dropping with proper signals like returning an error, logging a metric, sending to a
+dead letter queue, is completely different from silent dropping. The third, and this is real back
+pressure by the way, is to propagate the signal upstream. Tell the producer to slow down. The
+consumer's overload state travels backwards through the system until it reaches the source. And the
+source adjusts its rate. This is the cleanest solution, but requires every layer of the system to
+participate. And by the way, most production systems use all three at the same time. You buffer up
+to a point, you drop low priority work when the buffer fills, and you signal upstream to reduce the
+incoming rate. The art is in tuning when each mechanism kicks in. So, we just learned that the
+system can respond to overload in three ways. But here's the catch. You can only respond to overload
+if you've detected it. And most teams don't detect it until it's already a crisis. So, let's talk
+about the signals that tell you that overload is coming before things start breaking. The most
+important signal, and this surprises people by the way, is not how full your queue is, it's how fast
+your queue is growing. Think about it this way. A queue that's 90% full, but stable, is fine. The
+system is handling the load. You're using most of your buffer, sure, but it's not growing. It's
+steady, no action needed. But a queue that's only 30% full and growing fast, that's a ticking clock.
+If it's growing at 5% per second, you've got about 14 seconds before it's full. That queue at 30% is
+actually a bigger emergency than the queue at 90%. We'll have to instrument the growth rate, not
+just the depth. If you're using Kafka, then consumer lag is your growth rate. The difference between
+the latest offset and your consumer's committed offset. If that gap is widening, you're falling
+behind. The second signal is response time, specifically how long your slowest requests are taking.
+If most of your requests are fast, but a few are getting really slow, you probably have a bottleneck
+in one part of your system. Maybe one database partition is overloaded or one downstream service is
+struggling. If everything is getting slow across the board, your whole system is saturated. The
+important thing here is to not just look at averages. That's because averages hide the problems. If
+99 requests take 10 milliseconds and one takes 5 seconds, your average is about 60 milliseconds,
+which looks fine. But that one request at 5 seconds represents a real user having a terrible
+experience. The third signal is worker utilization, how many of your processing threads or go
+routines or workers are busy. If you have 50 workers and 49 are active, you're just one burst away
+from saturation. One more spike and you've got work queuing up with no workers to handle it. And the
+fourth signal, obviously, is error rate. But by the time errors are climbing, you're already in
+trouble. Connection pool exhausted, timeouts firing, downstreams returning 503 errors. These are
+some symptoms, not early warnings. The first three signals give you time to act. Error rate tells
+you it's already too late. The key insight here is to actually build something called as a graduated
+response ladder into your system. Don't just have healthy and broken, have levels. At 50% queue
+utilization, start logging warnings. At 75% start shedding low priority work. At 90% reject new
+rights entirely and build in hysteresis. Don't flip between states on every tick or you'll oscillate
+between shedding and accepting, which makes things worse. So by now, we know how to detect overload.
+But the next question is, what do we do about it? And the foundation of every back pressure strategy
+is a bounded queue. An unbounded queue is a lie. It's telling you, "Don't worry, I'll hold
+everything." But it can't. Under sustained overload, an unbounded queue will grow until it eats all
+available memory. So the first thing you do is to make every queue bounded. Set a maximum size.
+Force a decision when it fills up. So by the way, if you don't know what bounded and unbounded
+means, bounded is basically something that has an upper limit, which has a fixed size. And a
+decision, which is what happens when the queue is full, is the interesting part. There are actually
+four options for us. The first is the block option. The producer waits. It stops sending until space
+opens up. This is actual back pressure at work and the full queue physically prevents the producer
+from going faster. It's great for batch pipelines where waiting is acceptable. It's terrible for
+user-facing APIs where blocking means the user stares at a loading spinner. Second is drop the new
+item. Reject whatever just arrived. Tell the sender, "Sorry, try again later." This is the right
+choice for work that's item potent, meaning the sender can safely retry it. The third is drop the
+oldest item. Evict the oldest thing in the queue to make room for the newest. This keeps the
+freshest data. Think real-time dashboards, IoT sensor readings, live market data, where showing the
+latest value matters more than completeness. And the last is raise an error, which is basically
+throwing an exception back to the caller and letting them decide. This gives the most control to the
+producer, but requires the producer to have its own handling logic. Now, here's what I want you to
+understand. This isn't just an engineering decision anymore. It's actually a product decision. And
+this is why if you're a senior engineer, you need to understand this because as a senior engineer,
+you work with the business and product side of things. So, when the system is overloaded, someone's
+work gets dropped or delayed. Whose? Is it the free tier users, the batch analytics, the payment
+retries? If you don't decide this in advance, it gets decided at random during the incident, and
+that's always the wrong answer. And that brings us to load shedding, which is about choosing what to
+drop intelligently, not randomly. The idea is simple, not all work is equally important. When you're
+overloaded and have to reject some work, reject the work that matters the least. Think about an
+e-commerce platform during a flash sale. What work is happening? There are payment transactions,
+which are extremely critical. Every dropped payment is actually lost revenue. There are product page
+loads, which are important, but the user can refresh. And then there are analytics events, which are
+useful, but they can be delayed. And then there are search crawlers, which are nice to have, but who
+cares if they're slow during a flash sale. And this is where you assign priority tiers. Critical
+work like payments and auth always get through. Standard work like API requests from paying
+customers get processed next. Background work like web hooks, exports get shed first. And batch work
+like analytics crawlers, they're not very important, so they get shed immediately when there's any
+pressure. Uber does this in their trip processing pipeline. During peak load, internal analytics and
+reporting gets paused first. Customer-facing trip requests, the things that directly generate
+revenue, keep flowing. And the tiers are predefined, not decided during the incident. And one thing
+to watch out for is something called as priority starvation. If high priority work constantly floods
+the system, lower priority work might never run. And this is why the fix is age-based boosting. If a
+low priority task has been waiting for more than, let's say, a minute, bump its priority up. This
+ensures that even low priority work gets eventually processed, not just during peak pressure. Now,
+everything we've covered so far assumes that the producer is in charge. The producer pushes work,
+the consumer does its best, and when the consumer can't keep up, we detect it, we shed it, and we
+manage. But what if we flipped the whole model? What if the consumer was in charge instead? And
+that's what we'll cover next, but before we continue, I want to take a few seconds off and go a bit
+off topic and tell you about the AlgoRock Cohort. It's on the algorock.io website. It's a live
+cohort that I run with usually 10 to 15 senior engineers in a cohort. Because you might know that
+there are no cohorts that exist for senior engineers. Basically, people who already know the basics
+of architecture and system design, and are wanting to build next generation production systems in
+the post AI world. There's no content for them also on the internet. So, this is a 12-weeks program,
+and we cover topics like advanced system design, AI-native system design, architecture, all of this
+for the post AI world. And also tips and tricks to use AI coding tools, but from a senior engineer
+perspective. I'm planning the next cohort, which is actually my third cohort, around mid to end of
+May 2026. So, I want you to go through the AlgoRock, a l g o r o q dot io website. And I want you to
+check out all these topics that we're about to cover in the cohort. And if you think this interests
+you, then fill up the form that opens up when you hit the enroll button. I'll check to see if you're
+a great fit, and we'll set up a call with you. It's about $2,500 for the entire live cohort, and I
+teach the cohort personally, and it's a great experience. But if you just wanted access to the pre-
+recorded cohort videos, then you can get that for $800. Now, the live cohort is a great experience,
+and once you fill up the form, you can also talk to any of the people who have attended the cohort
+previously. And you can then decide if you want to go ahead or not. So, before we talked about
+AlgoRock, I was telling you about how we've assumed that producers are in control. But let's flip
+everything. Let's talk about how consumers can be in control. And this can be enabled by something
+called as a pull-based flow. So, let's understand this push and pull-based model. So, in a push
+model, the producer sends work whenever it has any work. The consumer takes whatever arrives, and
+does its best. If it falls behind, the queue fills. And all the mechanisms we just discussed, like
+bounded queues, shedding detection, are about managing this gap. But in a pull model, you flip
+everything. The consumer says, "I'm ready for more work. Give me 50 items." The producer sends
+exactly 50. The consumer processes them, and says, "Okay, give me 50 more." The consumer's capacity
+is the natural rate limiter. And this is actually how Kafka works under the hood. So,
+congratulations, you've learned how Kafka works under the hood really well now. So, your consumer
+calls poll, a function, which asks the broker for records. And the broker does not push records to
+you. You pull them at your own pace. That's why Kafka consumers have natural back pressure built in.
+If your consumer is slow, it just polls less frequently and lag grows as the signal. So, at this
+point, we've got a solid toolkit: detection signals, bounded queues, load shedding, and now even
+pull-based flow control. But all of this works within a single service. What happens when your
+system has 10 services in a chain and the overload is at the end of the chain? How does the service
+at the beginning know when to slow down? And this is where most systems fall apart, and it's
+probably the most important section of this video. It's called upstream propagation. So, I want you
+to imagine this: service A, service B, and service C. Okay? Service A sends requests to service B
+and service B sends requests to service C. Now, imagine that service C, the last one, is overloaded
+and starts dropping requests. So, service B, that's in the middle, notices that its queue to service
+C is full. So, service B starts shedding load, too. But the problem here is that service A, the one
+in the beginning, has no idea that anything is wrong. It keeps sending requests to B at full speed.
+B keeps shedding them. A keeps sending more. The pressure never reduces because the signal never
+reaches the source. And for back pressure to work, every layer needs to participate. Service returns
+a 503 to B. Service B sees its own queue growing and returns a 429 or too many requests to service A
+with a retry after header saying, "Try again in 30 seconds." Service A respects the header and
+reduces its sending rate. And each layer passes the pressure backward until it reaches the thing
+that can actually reduce the traffic. The retry after header is the key detail that most teams miss.
+A 429 without retry after is just a rejection. The client retries immediately, creating more load. A
+429 with retry after tells the client exactly when to try again. So, the client backs off for the
+right amount of time, not too short and not too long. So, that's how back pressure propagates across
+HTTP service, but a huge portion of modern systems are not request-response. They're actually even
+driven. And the single most common place you'll deal with back pressure in an even driven system is
+Kafka. So, let's get specific about how back pressure works in Kafka because if you're working with
+an even driven architecture, this is where you'll use these concepts every day. Kafka, as we've
+already learned in this video, is pull based by design. Your consumer calls poll function and
+fetches batches at its own pace, but there are specific settings that control the back pressure
+behavior. And getting them wrong causes one of the most frustrating Kafka failure modes. The setting
+is max.poll.interval.ms. This is how long Kafka waits between poll calls before it assumes a
+consumer is dead and triggers a rebalance. And the default is 5 minutes. If your consumer fetches a
+batch of messages and takes longer than 5 minutes to process them before calling poll again, Kafka
+kicks it out of the consumer group and reassigns its partitions. But rebalances are expensive. Every
+consumer in the group pauses while partitions get redistributed. So, an elegant solution is consumer
+pause and resume. When your processing queue is full, call consumer.pause on the partitions. The
+consumer keeps sending heartbeats to Kafka, so no rebalance is required, but it stops fetching new
+records. And when your processing queue drains below a threshold, call consumer.resume and the
+fetching starts again. This is clean, explicit back pressure at the consumer level. And LinkedIn
+runs over 7 trillion messages per day through Kafka. They've documented that using pause-resume with
+lag monitoring was more effective for back pressure than any queue-based approach. And consumer lag,
+which was the gap between the latest offset and your consumer's committed offset, is your primary
+back pressure metric. If it's zero, you're keeping up. If it's growing, you're falling behind. If
+it's growing fast, you need to either add consumers or reduce producer rate. So, monitor it and
+alert on it and treat it as seriously as you would treat CPU utilization on your database server.
+So, by now we've covered detection, queues, sharing, pool-based control, upstream propagation, and
+Kafka-specific pattern. Now, there's one last piece of the puzzle and it handles a scenario that
+none of the others cover well. What happens when a downstream service isn't just slow, but
+completely broken? So, with the help of this diagram, we'll cover a scenario where the downstream
+service is not overloaded, but actually completely broken. So, it's taking 30 seconds to respond to
+every single request and not returning any errors. It's just sitting there holding your thread
+hostage. So, without a circuit breaker, here's what happens. You send a request to the downstream
+service. Your thread waits, 30 seconds pass, timeout. You send another, wait, timeout. Meanwhile,
+your thread pool is filling up with threads that are all waiting on a dead dependency. After 50
+requests, your entire thread pool is blocked. New requests cannot be processed. Your service is now
+down. Not because of high load, but because you're waiting on something that isn't going to respond.
+But, a circuit breaker breaks the cycle. After a few consecutive failures, let's say about five, it
+stops sending requests entirely and all requests to that dependency immediately fail without
+waiting. Your thread pool clears and your service keeps running for everything that doesn't depend
+on the broken service. After a cool down period, say about 30 seconds, the breaker allows one test
+request through. If it succeeds, great. The breaker closes and normal traffic resumes. If it fails,
+the breaker stays open for another 30 seconds. The mental model shift here, and this is important,
+is that the circuit breaker protects you, not the downstream service. It's not about being nice to
+the broken service by not sending it traffic. It's about keeping your service alive by not letting a
+broken dependency drag you down with it. So, here's the one mental model I want you to walk away
+with. Back pressure isn't a single technique you add to your system. It's a design principle. Every
+component that accepts work needs an answer to the question, what happens when I can't keep up? If
+the answer is nothing, if the queue just grows, if the producer isn't told to slow down, if there's
+no shedding strategy, then your system does not have back pressure. It has a slow-motion crash
+waiting to happen. The next time you see Kafka consumer lag growing, or RabbitMQ rejecting messages,
+or your API returning 429s, you'll know that it's not a bug. That's back pressure doing its job. The
+system is communicating that it's at capacity. And the question isn't about how to suppress that
+signal. It's about how to respect it. So, I've written an entire article about this, breaking it
+down with all the code and implementation, with bounded queue implementations, load shedding,
+priority tiers, Kafka consumer configurations, circuit breaker state machines, and so on. It's
+[snorts] in the algorok.io/blog. You'll find it there. I'll also try to drop a link in the
+description of the video. Now, this video took a lot of effort to put together. So, if you found it
+useful, please share it with your friends, subscribe to the channel, and also leave a comment. I
+genuinely read all the comments, and I'll see you in the next video.

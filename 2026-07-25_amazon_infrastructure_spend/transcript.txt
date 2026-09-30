@@ -1,0 +1,382 @@
+capital expenditures this year are about $200 billion, and most of that money is going to AWS,
+specifically data centers and everything in them. That works out to over half a billion dollars
+every day. Back in 2016, James Hamilton, one of AWS's lead infrastructure engineers, said that AWS
+was adding as much server capacity every day as was needed to power the entire Amazon company in
+2004. For reference: in 2004, Amazon was already a company with a turnover of $7 billion. And, as
+you know, 2016 was 10 years ago. The title of this video says that AWS uses $200 billion worth of
+computing resources every year. But what does this really mean? You're probably thinking this.
+Amazon is the world's largest buyer of data center equipment. They buy servers from Dell and HP,
+chips from Intel and AMD, and network switches from Cisco and Juniper. In addition, they rent fiber
+optic channels from telecommunications operators. If you think about it, it looks like a regular
+company shopping list, just multiplied by a huge number, because AWS operates at a gigantic scale,
+right? But in reality this is not the case at all. AWS actually started building its own hardware.
+Now they are developing their own servers. They also design their own processors. They are called
+the Graviton line. AWS also builds its own specialized routers and lays its own fiber between
+continents, including ownership stakes in cables under the ocean and inside its data centers. It
+doesn't even use TCP, which, as you know, is the protocol that the rest of the internet runs on; AWS
+actually wrote its own protocol. AWS builds all of its own hardware not because Dell or Cisco make
+bad hardware, but because Dell or Cisco hardware is designed for companies that use thousands of
+machines. But AWS, as you know, operates at a scale of millions of servers, and at that scale, costs
+and failure rates that are not noticeable at normal sizes become enormous, and eventually building
+your own hardware becomes more profitable than buying it. In this video, my goal is to tell you
+about seven amazing features that AWS has developed, as well as some of the architectural solutions
+that allow them to scale so easily. First, it's a server. AWS has built a server that in many cases
+is impossible to access: not by customers, not even AWS engineers, nor anyone else. So why would a
+cloud provider deliberately restrict people's access to their own servers? Well, you'll have to
+watch the video to the end to find out. Secondly, it is a network. So, AWS built its own network
+hardware and transport protocol that sends each request dozens of different paths simultaneously.
+The third is cells. Most companies scale by increasing their services or microservices, but AWS
+scales by not allowing services to exceed a fixed size. The fourth is what is called shuffle
+sharding. So instead of permanently assigning customers to specific servers, AWS creates a separate
+miniature infrastructure for almost every customer. Fifth, it is constant work. AWS has built a
+system where the busiest day in history generates almost the same amount of work as a normal day. It
+may seem confusing now, but as you watch the video, it will all become quite logical. The sixth is
+something they created called Ficeria. After a single shared database paralyzed an AWS region for
+several days, Amazon's solution was not to build a larger database. The solution was to create
+millions of smaller databases. The seventh is proof. At the scale that AWS operates at, a one-in-a-
+billion error occurs almost every day, and no amount of testing can detect it in advance. That's why
+AWS validates its designs with mathematical proofs, including a theorem prover that runs every time
+the S3 console decides whether to mark a bucket as public. So we're going to go into detail about
+all seven of these things throughout this video. This video is for SREs, platform engineers,
+infrastructure engineers, backend developers, architects— in general, anyone who builds high-
+performance, scalable systems . Almost everything here is taken from published materials by Amazon
+itself. This information comes from the Amazon Builders ' Library, publications by engineers like
+Colum McCarthy and Mark Brooker, peer-reviewed articles like "Millions of Tiny Databases," articles
+on SRD, i3 micro, the Nitro security white paper, and talks by James Hamilton and Peter DeSantis at
+re:Invent. I reviewed these speeches at re:Invent, processed the articles, and turned all this
+publicly available information into diagrams. This will be an extremely visual video. Stay until the
+end, as we'll look at why AWS decided that TCP wasn't a good fit for them , and why they created
+their own transport protocol. So let's get started. There is a myth on Reddit about how AWS came to
+be . The myth is that AWS emerged as a way to rent out free Amazon servers or those that the company
+was no longer using. This story isn't entirely true , as Amazon's retail traffic peaks during the
+holiday quarter. So, a cloud built on spare retail capacity had to roll back servers every December.
+So the real leak was actually an internal problem. In the early 2000s, Amazon teams rebuilt the same
+infrastructure over and over again. And each project required setting up its own storage, its own
+computations, and its own database. Bezos made it mandatory for them to provide all of these things
+as reliable internal services. After several years of operating these services, the company noticed
+that managing the infrastructure itself, such as maintaining storage and computing for thousands of
+internal users, had become a separate skill. So AWS just packaged and sold this skill. AWS now
+manages millions of servers, and with that many, a failure ceases to be an event and becomes a
+statistic. So a failure with a probability of one in a million per machine per day happens every day
+when you have millions of machines. Right now, somewhere in their server park, disks are failing ,
+entire racks are going down, and none of it is making the news. And Werner Vogels, Amazon's CTO,
+summed it all up in one line. He said, "Everything breaks all the time in AWS." For the first decade
+of EC2, each host ran a hypervisor called Zen on its main processors. And now a little context. A
+hypervisor is software that divides a single physical machine into many virtual machines so that
+different clients can share the same hardware. This is exactly what makes cloud computing possible
+in the first place . And in those years, Zen did everything programmatically. Virtual networking,
+storage emulation, management layer— all of this ran on the same processors that customers paid for.
+But it comes at a price. Every CPU cycle spent on Zen is a cycle that cannot execute a client
+program. So, every gigabyte of RAM that Zen consumes is memory that the client cannot use. On a
+single server, these costs are very small, but AWS manages millions of servers, and at the scale of
+millions of servers, this cost becomes huge. These are entire data centers: buildings, power,
+cooling, doing nothing but running Zen. Most companies operate on a normal scale. So they are
+willing to pay this price, because it is obvious that creating their own equipment to avoid this
+would cost much more. But on a large scale, these overhead costs turned out to be greater than the
+cost of developing our own equipment. So in 2015, Amazon acquired a small Israeli chip company,
+Annapurna Labs, for $350 million. And the result of this acquisition was the Nitro system. The idea
+behind Nitro is to take apart the hypervisor and move each of its tasks from the CPU to specialized
+hardware. So now one microcard is responsible for virtual networks, another for EBS storage, another
+for local storage, and a separate specialized security chip checks every piece of firmware and
+software on the host before the machine is allowed to boot. All that's left on the processor now is
+a tiny hypervisor , whose sole task is to share the machine's resources. Almost everything else has
+been moved to hardware, making almost the entire server available for client tasks. This one
+acquisition was a one-time engineering investment. Every EC2 server built after that freed up CPU
+resources that would otherwise have been spent running Zen. And at the scale of AWS, eliminating
+even a few percent of overhead across millions of servers is worth far more than the cost of
+developing the hardware. But productivity is only half the battle. The other half is what Nitro
+removed from the server, namely the ability for anyone to log in. Sounds very strange, doesn't it?
+But let's learn more about this in the next section. Nitro did more than just bring virtualization
+to hardware. He also removed something else from the server— people. This means there is no SSH
+access to the Nitro production host. Therefore, customers cannot log in to them. But that's okay.
+What is most surprising is that even AWS engineers cannot log into them. Nitro's security whitepaper
+makes this clear. There is no interactive login mechanism , no shell, and operational tasks are
+performed through highly specialized authenticated APIs. Most people think of this as a security
+feature, and it is, but it is also a scaling solution. Imagine running millions of servers: if every
+production issue requires an engineer to connect via SSH, your operations team has to grow with the
+server fleet, and sooner or later it will become a “ bottleneck”, which is why AWS chose a different
+model. Instead of increasing the efficiency of humans in managing servers, the very need for humans
+to manage them was eliminated, which also eliminates a whole class of errors. A server that no one
+can log into is a server that no one can accidentally change. And this significantly reduces
+internal risks. When virtualization runs on Nitro cards instead of CPUs, the rest of the platform
+becomes surprisingly flexible. A bare metal instance in AWS is simply a Nitro server with the thin
+hypervisor turned off, as the networking, storage, and security isolation we discussed are still
+provided by the cards. Even EC2 Mac instances use the same design. These are physical Mac minis
+installed in AWS data centers, connected to the Nitro card via Thunderbolt, allowing them to use the
+same networking architecture, storage, and security as any other EC2 instance, and Nitro doesn't
+stop there. The team behind Anapurna Labs later created Graviton, AWS's own family of ARM
+processors. By redesigning the server from scratch, AWS gained control over every layer of the
+machine. The next step was to design a network that connects these machines together. James Hamilton
+has been explaining this level for years at re:Invent conferences, and his reasoning always came
+back to one question. When this device fails, what does this malfunction look like? And how many
+such devices do we actually have? So , let's start with routers. Companies like Cisco and Juniper
+sell large chassis routers— complex devices packed with tons of features. For most companies,
+purchasing such routers is the right decision. But AWS instead builds its own routers. And they are
+all designed around one standard switching chip. This is the same chip that anyone can freely buy on
+the market. So, it's just one chip around which a minimum of functions are implemented. A
+complicated router fails in complicated ways. So, it may take a whole week for diagnosis. When you
+have 10 routers, it's manageable, but when there are tens of thousands, you won't be able to cope
+because the time for diagnostics becomes the limit for your growth. But a single-chip router, very
+simple and without unnecessary features, fails very easily. He's either working or he's dead. It
+doesn't break in parts like complex routers. And in any case, you immediately know what to do. So
+AWS deploys these simple routers they created into large groups called Clos fabrics. This is a
+network architecture where layers of identical switches provide many equivalent paths between any
+two machines. Any individual router can fail, and the network will simply bypass it. Throughput
+increases by adding more identical blocks. If you've seen my video on Cloudflare's system design,
+it's pretty similar. Cloudflare applied the same idea to servers: a large fleet of identical
+machines instead of specialized ones. So AWS applied this down to the network hardware itself. AWS
+follows the same philosophy across regions. AWS operates its own global backbone network, and
+traffic between different regions runs over fiber that AWS controls. AWS also has an ownership stake
+in the submarine cables between continents, and that's what makes it all possible. This means that
+if there is congestion on the public internet , it will mostly not affect AWS inter-region traffic
+because AWS does not use the public internet between regions; it owns both routers and fiber optics.
+And then AWS analyzed the protocol on which all this works and decided that TCP was not the right
+protocol for their data center. As you know, TCP has powered the Internet for decades, and it is
+built on several key assumptions. The first assumption is that the connection takes a single route
+through the network. Second, packets must be delivered in the order they are queued, and third, if a
+packet is lost, you detect it and retransmit it within milliseconds. TCP was created for the
+Internet, and on the Internet all three of these assumptions are correct, but in AWS data centers it
+performs worse, and I will explain this using the example of the three assumptions mentioned. First:
+the "clos fabric" network architecture offers thousands of parallel paths between any two nodes, but
+TCP uses only one of them, since it is designed for one connection over one path, while thousands of
+other available paths remain unused. Second: TCP focuses on delivery in the queue order, which means
+that one delayed packet blocks all subsequent ones, even if they have already arrived. And the
+third, if you remember, was about millisecond recovery, but AWS data centers measure round trip time
+in microseconds, which means that recovering a lost packet takes a thousand times longer than
+delivering it. There is no downside to TCP in this. TCP does its job, but the assumptions it was
+built on are not very suitable for the conditions of the AWS data center. Therefore, AWS created its
+own transport protocol. It's called SRD, or Scalable Reliable Datagram, and its design is published
+in SIGCOMM. So you can check it out if you want. SRD takes each of the TCP assumptions and changes
+it to the opposite. With SRD, packets of a single stream are simultaneously sent through 64
+different paths in the network. Second: the order of packets is no longer tracked at all. Packets
+arrive in random order, and the higher layer assembles them together. Third: retransmission occurs
+in microseconds, not milliseconds, and congestion control is configured for exactly one network—
+Amazon’s own network, since SRD does not need to operate on the open internet . The advantage of
+creating your own protocol becomes apparent when something goes wrong: when a path becomes
+overloaded or a switch goes down in the middle of a transmission, the flow barely notices it because
+it never went only one way to begin with. A down link takes up only 1/64 of the flow's bandwidth,
+and retransmitted packets are sent in microseconds over the other 63 paths. In the next section,
+we'll talk about how AWS scales services without letting them become unwieldy. Before we do that, I
+want to take a few seconds to tell you something important. If you are in a leadership position on
+an engineering team, such as VP of Engineering, CTO, Lead or Principal Engineer, SRE, Platform
+Engineer, or Architect, then you really have nowhere to learn. Because all learning platforms are
+designed for beginners and are mostly interview-oriented, and system design in interviews is just a
+short 45-minute analysis of the problem. But you can't build an industrial system based on this
+knowledge alone. So, if you've been trying to find a place for experienced engineers and don't know
+where to spend your annual corporate training budget, you'll probably like the ALROG platform. The
+link to it is in the description of this video. This is a platform we are currently developing.
+There will be in-depth tutorials on system design, software architecture, learning paths, AI-based
+architectural overviews, downloadable Excal diagrams, and a large database of engineering
+references. If you need something more practical, I also teach a 12- week course in advanced systems
+design. I do this several times a year. Together we work on real working systems, architectural
+reviews, and large-scale cases. However, there is a long queue for live streams as we can only
+accept 15 engineers per group. So if you want immediate access to recordings of previous classes,
+you can sign up for a self- study program for just $800, which is usually reimbursed by the company
+. You'll find everything, including free resources, platform access, and group recruitment, on
+algor.io. Link in the description. Now let's get back to the video. Now let's talk about how
+software typically grows. Here is a typical development story. The service is becoming popular. The
+server base behind it is growing. The database is expanding. The queues are getting longer. It's the
+only system that just keeps getting bigger and bigger. And two more things grow along with it. The
+first is the scale of the worst possible failure. That is, everything that can go wrong now happens
+on a new, larger scale. The second is a bit less obvious: the size of the load testing you are
+doing. So how do you actually test a service for the load it will eventually reach? You won't do it
+because no one can do it, and therefore the work environment becomes the first place where the true
+scale of the service is tested. So AWS's answer to both of these problems is a technology called a
+cell. A cell is a complete, standalone copy of the entire service. So it has its own pool of
+resources, its own database serving a fixed group of customers, and has a strict size limit. When a
+service needs to scale, AWS does not increase the size of cells, but simply adds new ones. So, the
+unit never gets bigger. There are simply more such units appearing. This size limit solves both of
+the problems we just discussed. So a failure, such as a bad load, a poisoned dependency, or a data
+problem, stops at the cell boundary because there is nothing in common between them . The worst
+possible failure is now limited to the size of just one cell. And the size of this cell is a metric
+that has already been determined. Testing is also changing accordingly. You can create one full-size
+cell in a test environment and load it to the max before real traffic arrives. You cannot load test
+a service at any size it will reach in the future. But you can certainly test one cell at full
+capacity. And one cell at full capacity is the largest unit that will ever exist in a productive
+environment. But there is one tricky part, and AWS is open about it . Above the cells is a routing
+layer that connects each client to its cell. This layer interacts with each client, making it the
+only component that is not protected by the cell boundary. Therefore, the rule is that this layer
+should be significantly simpler than anything it routes. In fact, it's just a search engine, as
+lightweight and static as possible, without business logic. And this is a popular philosophy. A
+single component that can affect everyone in your architecture should contain almost nothing that
+can break. If you saw my video about the design of the Jira system, it's somewhat similar. Atlassian
+provides each tenant with its own database and groups these databases into shards with a fixed
+maximum size. So it's the same idea: limiting units and scaling by adding new ones. So , AWS cells
+isolate customers by dividing the service into compartments. The next technique we will look at
+isolates clients without separating anything, using combinatorics. Every multi-user system has the
+same worst client. The one whose request is poisonous . It may simply be bad input that is causing a
+crash in whatever process is handling this request. Perhaps this is a targeted attack on their
+domain. In any case, handling the traffic of this worst client kills the handler of this traffic.
+Let me explain. Imagine a fleet of eight worker nodes behind a load balancer. The poison request
+hits the first node, and the first node dies. The client tries again. This is what clients are made
+for. And the retry goes to the second worker node. Now the second node is failing too. And after
+eight attempts, one client ran his "poison" through your entire server fleet. It started with one
+tenant, and now everyone is out of work . The standard protection against this is sharding. So, you
+divide the eight nodes into four shards of two and hash each client to one shard. Now the "poisoned"
+query kills one shard and stops. But all clients who accidentally fall on this shard fall along with
+the "poisoner ". So one tenant is now disabling a quarter of your customers instead of all of them.
+It's better, but still bad. Here's what the Route 53 team did instead. A Cole MacArthur Hayes
+article in the developer's library details these numbers. Do not divide nodes into groups at all.
+Give each client their own combination of nodes. Let's say two nodes out of eight. Now, how many
+ways are there to choose two out of eight? That's 28. So, the same eight cars, but 28 possible
+combinations. And each client works on one of these combinations. Now let's run through the "poison"
+scenario again. The " poisoned" client disables its two nodes. Their combination is dead. But let's
+look at everyone else. Almost every other client shares at most one node with the victim, while the
+other remains healthy . So their retry lands on a healthy node, and they don't even notice the
+failure. The only clients that went completely offline were those assigned to the same pair of
+nodes, which is one of 28. So, the same eight machines, and we didn't add any new hardware. The
+damage from a single problematic tenant has now dropped from 25% of customers to less than 4%,
+because shards intersect and retries bypass these intersections. And here the numbers start to grow
+rapidly. Take 100 nodes and give each customer a combination of five. You can choose five out of 100
+in 75 million 287,520 combinations. That's over 75 million different combinations on just 100
+machines. And the odds of another client sharing the same five nodes with you are 1 in 75 million.
+In practice, you have more rejection domains than customers themselves. Now , if we compare the two
+growth rates: the transition from eight machines to 100 is a 12.5-fold increase in equipment. But
+going from 28 combinations to 75 million is an increase of about 2.7 million times. So, equipment
+can only grow linearly, but insulation here can grow combinatorially. Route 53 uses this very method
+to decide which DNS servers will answer queries for each client's domain. This is one of the reasons
+why Route 53 offers a 100% availability SLA for DNS queries, being the only AWS service with such a
+guarantee. AWS engineers have also publicly stated that this part of the service has never failed in
+nearly two decades. At AWS, this idea proved so effective that it has since been applied to many of
+the company's other large-scale systems and even released an open source library. So, by creating
+all these combinations, they called this technique “ shuffle sharding” . This prevents one client's
+failure from becoming a problem for everyone else. And now the next architectural solution solves
+another problem. What happens when everything changes at the same time? Now I want to talk about a
+great concept that I personally started using in the systems I design — it's called " always on" and
+it became popular thanks to AWS. So I ask you to pay attention to this for the next few minutes. OK.
+The obvious way to synchronize a distributed system with a large number of servers is to send only
+the changes that have occurred. So if server A goes down , we send a message to the rest of the
+system that server A is down. And if the server recovers, we send another update. It is effective,
+but this effectiveness comes at a price. On calm days, when there are no disruptions, almost nothing
+changes. Therefore, almost no work needs to be done . But on bad days, during large-scale outages or
+switchovers, thousands of things change at once. Suddenly, thousands of updates need to be pushed
+out across the system at the exact moment when the infrastructure is under the most strain. The more
+chaotic the day, the harder the synchronization system has to work . And there is another problem.
+If even one update is missed —due to a lost message, a software bug, or operator error— the various
+parts of the system gradually lose synchronization. Unless something later explicitly corrects this
+error, they remain inconsistent. The Route 53 health check system was designed to avoid both of
+these problems. The mechanism is surprisingly simple. Every few seconds, the central service writes
+the full state of each health check to a fixed-size file stored in S3. Every few seconds, each DNS
+server downloads this entire file. If nothing has changed, they will still download the entire file.
+And if 100,000 state checks have changed, they still download the same file in its entirety. So,
+every time it's the same file, the same size, and the same amount of work. Therefore, the load never
+jumps, as it does not depend on how much everything has changed. And consistency becomes almost
+automatic. If one server misses an update or momentarily receives incorrect data, the next upload
+fixes it with a fully correct state a few seconds later, and Cole McCarthy compares it to a coffee
+machine. A barista who makes drinks to order has more work to do when more customers come in . But
+the coffee machine brews the same pot whether one customer comes in or a thousand. For systems that
+must remain available, AWS prefers the coffee machine method. This design is intentionally wasteful.
+Most updates contain almost no new information, but that's the trade-off. A small, predictable fee
+paid every few seconds in exchange for a system whose behavior does not change under load. Because
+even on the busiest day, she gets almost the same amount of work done as on the quietest. This is
+called “steady state operation,” and it keeps the system stable even when everything is changing at
+the same time. On April 21, 2011, a routine network change in the US East region went wrong. The
+traffic that EBS uses for replication was shifted to a low- bandwidth backup network, and volumes
+across the region lost connectivity to their replicas. When the connection was finally restored, the
+real problems began. A huge number of volumes were simultaneously trying to restart mirroring,
+essentially creating a storm: they were all looking for space and sending queries to the same shared
+management database that keeps track of where each volume's replicas were. And this database crashed
+under load, which stopped recovery , left volumes locked, and sustained high load levels. So the
+degradation lasted for several days. The postmodern lesson was structural, not procedural. They
+found that a single database containing metadata for every volume in a region means that all volumes
+in a region have a single point of failure. The postmodern lesson from all this was structural, not
+procedural. They found out that they were using a single database that stored all the metadata. So,
+a single database storing all metadata for every volume in a region means that every volume in a
+region has a single point of failure. Growth only made things worse because more volumes needed to
+be added each year , which meant that the next recovery event would create even more traffic to the
+same shared database; and this was not a temporary bottleneck . This means that there was an
+architectural limitation that became increasingly stricter as EBS evolved. The obvious solution
+would be to build a bigger database: more processors, more memory, and more replicas. But AWS went
+in the opposite direction and published the design as a peer-reviewed article, which they called
+"millions of tiny databases." This is the title of a paper written by Mark Brooker and colleagues,
+presented at the NSDI 2020 conference, which you can read online. The system they created is called
+Fisalia, and the title of the article literally explains what they built: millions of tiny
+databases. So, instead of one database containing metadata for each EBS volume, Fisalia runs one
+database per volume. And this is a cell of seven nodes that reach agreement among themselves using
+Paxos. In other words, each volume is now managed by a group of seven machines that synchronize
+their state using Paxos. And if you don't know, Paxos is a consensus protocol that allows a group of
+machines to agree on values, even if some of them fail. So now there are millions of volumes with
+millions of independent databases across seven nodes. So when a cell fails, it only takes down the
+configuration of a single volume, not the configuration of an entire region, and the most innovative
+thing here is where these cells are placed . For consensus to occur, it is necessary that the
+majority of its nodes are available. Therefore, Fisalia places the seven nodes of each volume
+physically and topologically close to the client and replicas of that volume. There is one more note
+regarding design. Fisalia is a CP system. So when a network disruption occurs, it chooses integrity
+over availability, as a configuration wizard should do, and then restores availability due to its
+small size and locality. So you saw that the solution to a database that couldn't scale wasn't a
+bigger database. It was just millions of little bases, each placed next to whatever it controlled.
+Now I want to tell you about how AWS uses mathematics and formal proofs to reduce failures. And I
+think that's just great. If you think about it, any kind of testing is a form of sampling. In unit
+tests, integration tests , chaos experiments, each of them tests certain parts of the system and
+assumes that the untested parts behave the same as the tested ones. If you remember, at the
+beginning I mentioned Vogel's phrase: everything in AWS constantly fails. So at the scale of AWS,
+this also applies to probabilities. So, a bug that requires a "one in a billion" sequence of events
+is no longer rare . among millions of machines performing billions of operations. A one-in-a-billion
+sequence happens somewhere on a typical day, and a sample cannot capture it. There will always be
+more untested parts than tested ones, and given enough scale, untested paths will work sooner or
+later. So testing examines some execution paths and assumes that others behave the same way. But
+mathematical proof is different. It asks whether every possible implementation satisfies the
+property you are trying to guarantee. AWS uses this idea in production in two different ways. The
+first is design verification. Engineers describe a distributed system using TLA+, a language for
+defining how a system should behave . Model validation then examines each achievable state of that
+design, looking for implementations that violate the expected behavior. This is not testing. This is
+a systematic investigation of every possible path in the model. One famous example is from DynamoDB.
+Model validation found a replication error whose shortest sequence of failures required 35 specific
+steps. Detecting this through testing or chaos engineering would be extremely unlikely. The second
+use of formal methods is much closer to what you have probably used yourself. IAM policies. An IAM
+policy is not just a list of permissions. These are patterns, conditions, principles, and rules of
+resources that interact in ways that are difficult to grasp manually. That's why AWS created a
+system called Zelkova. Instead of testing a few example queries, Zelkova turns the policy into a
+mathematical problem and asks a theorem: can any query under any conditions make this S3 bucket
+public. Pay attention to the difference. It doesn't just check those requests that someone guessed
+to test. It checks every possible query that may exist. This is the mechanism behind IAM Access
+Analyzer, S3 Block Public Access, and even the "public" label that appears next to an S3 bucket in
+the AWS console. So every time you change a bucket's policy, theorem proving evaluates whether that
+policy could expose your data. They don't do this through selective requests. They prove the answer
+mathematically, which I think is simply incredible. OK. In this video, we looked at seven
+architectural decisions made by AWS. And now we will go through the entire architecture to summarize
+everything that has been said. Imagine you are launching a new virtual machine in AWS. The request
+first goes to a group of servers, where sharding ensures that your account is processed by its own
+combination of machines. If another client is causing crashes at this point, they are almost
+certainly affecting a different combination, not yours. AWS then selects a physical server to run
+your virtual machine. Long before the server boots, Nitro's special security chip checks every byte
+of firmware or software on it. Nitro hardware provides network, storage, and security isolation,
+leaving almost the entire CPU available to your application. Your virtual machine starts working.
+When it starts transmitting data, SRD distributes each network flow across 64 different paths in the
+AWS network. If one switch fails, only one path disappears. Lost packets are forwarded via other
+paths within microseconds, and the transmission continues. And your storage volume is managed by
+Feria's own 7- node database, located next to the storage it manages. If another volume fails, it
+doesn't affect yours because each volume has its own independent metadata base. After a few seconds,
+route 33 again propagates the full health status of the infrastructure. Whether one server or
+100,000 servers change, the amount of work always remains the same. And the system was designed
+exactly that way. If you remember from the section on persistent work, your application stores data
+in S3 in the meantime. And if a bucket isn't marked as public, it's not because AWS has tested
+multiple example queries. This is because the theorem proved that almost no possible query can
+reveal it. During this entire sequence, no one logged into the production server, and such a
+possibility simply does not exist. And while your virtual machine was booting, somewhere inside AWS,
+disks were failing, machines were rebooting, and the entire rack could lose power, but your
+application didn't notice. That's what AWS engineering is all about. These are not equipment that
+never breaks, but systems designed so well that these failures rarely become your problem. So, what
+can we take away from all this ? There are a few things we can learn here and use in our own
+systems. First, small costs do not remain small when scaled. A few percent of CPU load on a single
+server is nothing, but a few percent on millions of servers is entire data centers. So always
+multiply the cost of one car by the number of cars you will eventually have. Second, don't build
+systems that depend on scaling with human participation. If every incident requires someone to SSH
+into a production server, your operations team will eventually become a bottleneck . Third, prefer
+many small independent systems to one huge shared system. Smaller systems are easier to test, easier
+to analyze, and failures remain isolated. Fourth, question the assumptions underlying your
+technologies. TCP was designed for the public internet , while the AWS network worked very
+differently. Therefore, AWS created a different protocol. Fifth, isolate clients where possible.
+Shuffle sharding showed that sometimes you don't need more hardware, you just need a better way to
+distribute clients on it. Sixth, if the system must never fail, make its workload predictable.
+Therefore, constant work intentionally consumes a little computing resources every day. So the
+busiest day looks pretty much the same as any other day. Seventh, when one common component is
+guaranteed to become a " bottleneck," don't just make it bigger. Divide it into many smaller parts
+and place them next to the resources they manage. And finally, remember that testing has its limits.
+And at the scale of AWS, one-in-a- billion events happen all the time. So when correctness really
+matters, sometimes the answer is not more testing, but mathematical proof. This is exactly the
+production architecture that we analyze on the Algorok platform to understand why these systems were
+created, what tradeoffs lie behind them, and what engineering decisions made them work. If this
+sounds interesting, you'll find a link to Algorok in the description of this video. Creating such
+in-depth analyses takes a lot of effort, especially research and working on diagrams. So, if you
+enjoyed this video, please subscribe, like, and share it.

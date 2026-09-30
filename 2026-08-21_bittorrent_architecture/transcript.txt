@@ -1,0 +1,504 @@
+Many people on Reddit, including me, believe that Bram Cohen, the founder of BitTorrent , is
+actually Satoshi Nakamoto, the creator of Bitcoin. And once you watch this video carefully, you'll
+probably start thinking the same way . So, in this video, we'll break down the BitTorrent protocol
+piece by piece. If you are interested in decentralized networks and distributed systems, you should
+watch this video to the end, because there is a lot of interesting stuff here. As you already know,
+conventional systems can scale simply by adding resources: engineers can add more servers, a larger
+cache, or a CDN in front of them. But BitTorrent has no leader. Therefore, issues of capacity,
+trust, scheduling, incentives, and node discovery all had to be addressed within the protocol
+itself. In 2004, measurement company CacheLogic reported that one protocol, BitTorrent, accounted
+for about 35% of all Internet traffic, which was more than all other P2P networks combined, and more
+than regular web traffic. There was no company behind this protocol , no data centers, or servers.
+It was developed by just one programmer, Bram Cohen , who wrote the first implementation in Python
+and released it in 2001. That's why it's important from an architectural point of view. In every
+client- server system, the capacity is fixed, and each new user consumes it. BitTorrent completely
+turns this relationship upside down. Each new user who uploads a file also adds their own push power
+to BitTorrent. Thus, the total system capacity increases with demand. A surge of traffic that
+overloads a regular server actually makes a BitTorrent swarm faster. This design is still in use
+today and has many applications beyond simple file sharing. When Twitter needed to deploy code to
+thousands of servers, they ran BitTorrent in their data center and reduced deployment time from 40
+minutes to 12 seconds. Windows Update uses P2P distribution to over a billion computers using this
+technology. And when Mistral releases an AI model with open weights, they publish magnet
+links—something you've probably seen when you've used BitTorrent. This video is for SREs, platform
+and infrastructure engineers, lead engineers, architects—in fact , anyone who builds systems that
+have to handle unpredictable loads. Everything here is based on Bram Cohen's paper on the protocol
+called "Incentives Build Robustness in BitTorrent," the official protocol specifications, an article
+about Kademlia, and engineering reports from Twitter, Facebook, and Uber. I just turned all this
+publicly available information into these charts. So stay until the end as this will be a very
+visual video. Let's quickly take a look at the different components of BitTorrent to make it easier
+for us to understand everything that comes next. First , there is a master file that needs to be
+distributed across the network, and it is actually broken into pieces, and we will look at the
+mechanics of how this is done later. Then there is a small metadata file that has the extension
+.torrent. And the way to start downloading anything with BitTorrent is to first download that
+torrent file. It simply contains a detailed list of all the parts that the main file has been split
+into, along with the cryptographic hash of each of those parts. In addition, it contains the tracker
+address. And we'll talk about trackers in a moment. If you want to download a file from a torrent
+network, you need to connect to it, and this makes you part of the BitTorrent network. Machines and
+servers in a BitTorrent network are called peers because they are all equal in their capabilities.
+So it's not a client and a server, they're all peers. But essentially, when you download something
+from a torrent network, you automatically become a peer, whether you want it or not. So if you look
+at our diagram, this is a pore, and this is how a new pore joins the network. And we'll talk about
+all the mechanics in the video process. But there is also something called a tracker. So, a tracker
+is a coordination server with a single task. It maintains a list of peers that are currently active
+on a particular file. The tracker actually gives each new peer a few dozen addresses of all other
+peers, but it never touches the file data itself. Everyone who is active on one particular file is
+called a swarm. So I mentioned swarm here, that's everyone who works with that particular file. A
+peer that can own all parts of the main file is called a seeder, and a peer that is still
+downloading and only has a few parts of the file is called a leecher. If you've used BitTorrent, if
+you've actually downloaded files from BitTorrent, you've probably seen seeders, leechers, and peers,
+and you know about swarms; but this is probably the first time you're hearing about the tracker and
+all the things we're learning, like how a pir joins the network. You've probably encountered these
+things before, but this video will make it quite clear how it all happens. And that's why in this
+video we're going to look at seven things. First, we'll talk about why the client- server model has
+a hard performance limit and how BitTorrent helps us get around it. Second, we will look at how this
+protocol accepts data from completely untrusted participants and still guarantees its integrity.
+Third, we will discuss how BitTorrent clients decide which fragment to download next and why so much
+attention has been paid to this. And fourth, we will talk about the level of incentive: what
+encourages people to continue sharing and how the protocol solved the problem of "hares" who only
+consume but do not give data to the network. And they did it without a reputation system or any
+centralized control. If this is still unclear to you, I will explain everything in very simple
+language. So when a member joins the network, right? He does this only because he wants to download
+some file, and all the other participants already have some part of it. Some members have all the
+parts of the file—they're the " seeders" we mentioned earlier, and some new members, like this one,
+are "leechers" because they want to download this file. And the fourth point is about how to make
+sure that this user, when downloading, is also motivated to give the file back to the network for
+new leechers or participants joining the giveaway. Since no one can force you to do this, BitTorrent
+had to implement an incentive mechanism that forces the leaker to also continue to give back , or
+"sit" on, those parts of the file that he already has access to. This is what we will talk about in
+the fourth chapter. And I think that's very interesting. So stay with us. I repeat once again: there
+is no centralized coercion here. No one is forcing you to do this. There are no rules here. There is
+no reputation system as such. But at the level of the protocol itself, there are built-in incentives
+that ensure that a new participant or leecher will also start becoming a seeder. Next, we'll talk
+about distributed hash tables, or DHTs. If you have experience working with algorithms and data
+structures and low-level systems, you have probably encountered DHT often. Now we will also discuss
+how BitTorrent removed the central tracker server from the participant search process. We've talked
+a lot about the central tracker, but BitTorrent has gone a step further—they've gotten rid of it
+altogether . Fifth, we'll talk about distributed hash tables, or DHTs. If you know the basics of
+algorithms, you probably understand how DHTs work, but we will look at them specifically in the
+context of BitTorrent. We will also look at how BitTorrent removed the central tracker server. You
+remember that BitTorrent had this central tracker, right? But we're talking about the fact that they
+eventually got rid of the central tracker to completely decentralize their entire network. So, they
+completely abandoned central trackers in favor of P2P search, so you no longer need a central
+tracker sending you a list of peer addresses. Peers simply find each other automatically using
+Kademlia. So, Kademlia allows you to find peers in a network of tens of millions of nodes, and this
+is how the final stage of decentralization is achieved. If you were into the Web3 topic during the
+boom in 2021, 2022, 2023, you probably know how Kademlia works, how DHTs are used, and how Kademlia
+provides this P2P search. But if you don't know how it works, this video will help you figure it
+out. Sixth, we will discuss UTP and Ledbat—a BitTorrent approach to managing network congestion.
+They were created to use free bandwidth without interfering with other internet connections. And the
+most interesting thing is that Microsoft and Apple now use them—UTP and Ledbat—in their operating
+systems . If the words " congestion management " and "free bandwidth" are unfamiliar to you, let me
+explain: when people started using BitTorrent, it consumed all their bandwidth, which led to a
+negative experience. Therefore, BitTorrent had to create a solution so that users could use the
+remaining bandwidth for other things, while BitTorrent only consumed a portion of it. So, they
+developed these two technologies for this purpose, and we'll go into more detail about all of this
+throughout the video. The seventh point we will consider is where this architecture works in
+production today. It is used in Twitter, Facebook, Uber, Windows, and to distribute AI models.
+Finally, we'll look at five lessons you can apply to your own systems. So let's start diving into
+all of this. To understand why BitTorrent came about, let's start with the architecture that existed
+before it. In 2001, to distribute a file, you typically hosted it on a single server, and each
+download pulled every byte of the file from that server only. So, the cost of traffic increased
+linearly depending on the number of users, while the capacity remained fixed at the level you
+allocated in advance. A failure in such a situation is called the " flash crowd" effect. If a link
+to a file appears on a popular resource and demand for it increases dramatically, the server becomes
+overloaded precisely when the file is needed by the largest number of people. This effect, where
+many people want the same file at the same time , happened so often that a name was invented for it.
+It was called the " slash dot effect." The structural problem here is that demand and capacity are
+completely decoupled. That is, capacity is allocated in advance, while demand for the resource is
+sudden and unplanned. This means that a mismatch between capacity and demand leads to either wasted
+money if you have allocated more capacity than you need, or to a disruption if there is less
+capacity and demand suddenly increases. If all this seems confusing to you, let me explain in simple
+terms. Let's say there's a file on one server, and all the other clients want to get it, and the
+only place they can download it from is that server. Let's say a link to this file appears on a
+popular resource: in someone's newsletter, a popular blog, on a well-known news site, or even if a
+celebrity shared it. The file becomes very popular, and now everyone— let's say millions of people
+on the internet— want to download it. The problem is that when someone set up a server with this
+file, they allocated some capacity. Let's say this machine had about 32MB of RAM, which was standard
+for 2001, about 64GB of disk space, also around 2001 levels , and perhaps some amount of processing
+power. This was allocated in advance with the expectation that the file would be downloaded by, say,
+a few thousand people. But because of a link on a popular blog, millions want to download it , and
+since you can't change the configuration of that machine, it becomes a " bottleneck." Actually, all
+of this together is the "Slashdot effect." So, we are talking about the fact that the capacity
+allocated in advance is in no way related to current demand. Demand can suddenly increase, and if
+that happens, the system will fail. But if you rent a very powerful server and there is no demand,
+then you end up wasting all your resources . So, no matter how you look at it, it's ineffective in
+both cases . This graph just shows that you are either wasting resources or experiencing outages
+when demand spikes, while capacity remains the same. BitTorrent was created to solve this problem.
+The key feature of BitTorrent is that if you download a file via BitTorrent, you automatically
+become its distributor. This is not an optional option. This is a property of the protocol itself.
+Let's simulate a sudden influx of users and look at the numbers of what happens when using the
+BitTorrent network. Old file transfer protocols. Let's say there is one source with a file and
+others want to download it. Let's imagine there are a thousand clients who need this file. Then,
+between all these clients and the server, one communication channel is divided into a thousand
+parts. Now compare this to BitTorrent, which you see on the right. With BitTorrent, thousands of
+clients also become distributors of that file. They actually serve each other. So this source server
+that has access to the file has to upload each byte to the "swarm"—that is, to this entire network
+of servers—only once, and these peers then copy the files to each other, as you can see in this
+diagram. If you calculate the capacity now, it's not just one output server. Capacity is the
+combined throughput of all peers in the network, meaning that the capacity of the network simply
+scales with the number of participants. Simply put: the more people join the network to download a
+file, the more they themselves become distributors of the file to others, joining this "swarm." They
+are all equal peers, as each can serve the other , and they are not dependent on just this one
+originating server. The source server has uploaded all parts of the file only once to the entire
+"swarm", and now they can copy them from each other. Therefore, the limited capacity problem that
+you encountered earlier is absent here, since the total capacity is equal to the sum of the
+capacities of all servers in the entire network. So, in the old model, server power is the
+bottleneck and the main limitation. Whereas with the new BitTorrent approach, capacity is almost
+unlimited, because as more people join the network, its bandwidth increases . So, essentially, it
+has infinite scalability. If you think about it, this approach is simply an inversion of the
+traditional one, which immediately creates three engineering problems. The first is integrity, as
+you are now accepting files from untrusted computers on the network. The second is scheduling,
+because now we have to decide which node downloads which part of the file and in what order. The
+third engineering problem is incentives, because transferring a file costs traffic, and there is
+nothing to force anyone on this network to actually upload data. And the BitTorrent protocol is
+actually quite ingenious because it solves all three of these problems. And each solution, as we'll
+see, is a technique that can be reused in other parts of your systems. So we'll start breaking down
+each of them right now . A file to be distributed over a network is cut into equal parts, usually
+from 256 kilobytes to several megabytes each. A large file is broken into several thousand pieces,
+obviously because it will have many more segments. And by splitting the file, you get two benefits.
+The first advantage is parallelism, as different parts of the file are downloaded from different
+nodes simultaneously. Instead of requesting one block of a file, waiting for it to arrive, and then
+requesting the next one , the client can start pipelining requests for several blocks in advance,
+and the network now continuously transfers data instead of waiting for confirmations. And it is this
+second idea that turns downloaders into distributors on the network. Once the client validates the
+part, it can immediately start providing it to other nodes. This means that once a new node joins
+the network, you don't have to wait. As soon as it verifies the first part, it can immediately start
+serving or " distributing" it to the rest of the network. In the previous section, we learned what
+the protocol guarantees: when a machine joins the BitTorrent network to download, it must
+immediately start “distributing” that file. This means that a node becomes a source on the network
+within seconds of joining, rather than after the download is complete. So, the main difference I'm
+trying to convey to you is that you don't have to download the entire file. If you are a node on the
+network, you don't have to download the entire file before you start "sharing" it. Once you receive
+the first part and verify it, you can start " distributing" it to the rest of the network. And
+that's what makes the BitTorrent network so powerful. And the reason it can instantly retrieve data
+from the first fragment is because of these fragments. If you didn't have these fragments, this
+would be impossible. So now, participants in this network, like this one, have to accept fragments
+from other participants, right? But the thing is, as we just discussed, any participant can
+instantly join the network, and once they verify the first fragment, they can immediately start
+distributing. But how then can we trust these participants who have just joined the network? You
+can't trust them, can you? This is the problem of integrity that we will now discuss. So the problem
+we're discussing is that any participant can join the network and start sending corrupted data. This
+could be malicious intent, for example if the new participant is an attacker. They want to bring the
+network down, or it could just be errors, for example, the client or participant doesn't know that
+this piece of data they're sending actually contains errors. So if a participant downloads this
+information from a malicious peer, they are effectively wasting their traffic and then transmitting
+this garbage to all other participants in the network, and this can bring the entire network down.
+So, a basic, simple solution would be to authenticate the participant before joining the network,
+right? But that won't help, as participants are supposed to be anonymous. This is what
+decentralization is all about. And the participants should be interchangeable. We don't want to
+depend on just a few participants. We want everyone to be able to contribute to the network. So the
+participants should be interchangeable by nature. So, the protocol should actually verify the data,
+not the sender. This is an important idea: you are not checking the sender, but the content itself.
+Earlier I showed you a .torrent file and mentioned that it is a metadata file with the .torrent
+extension. This file contains a SHA1 hash for each piece of data, which is calculated by the
+original server —the source that downloads all this information. So, the source server, when
+downloading this information, was also responsible for creating the torrent file. So when you as a
+participant download a file from the network, you get metadata, but as we said, it comes from the
+original server. If you work with blockchains or in the security field, you are well aware that a
+hash function maps any input signal into a short, fixed- size fingerprint. And if someone changes
+even one bit of the input data, the output data will change completely; it is also computationally
+impossible to create data that matches a given fingerprint. And you can see all this that I said, if
+that makes sense. If you watch any videos about SHA 256 on YouTube, even I made a video about the
+SHA 256 algorithm and how it works. And there are many such videos online, because SHA 256 is the
+main algorithm on which Bitcoin is based. So be sure to check them out. And the main thing you'll
+see is that if you change the input, let's say the information for which you want to get a
+cryptographic hash, if you change even one bit of the information , the entire hash or the
+fingerprint that is the hash will change, and you won't be able to verify that information. This is
+what keeps blockchains afloat. So the rule in BitTorrent is that you accept a piece of data from any
+node, then locally calculate its hash and compare it to the metadata contained in the .torrent file.
+Comparing with the metadata, if the fingerprints match, both match, then you can save that part and
+start providing it to the rest of the network. But if there is no match between your calculated hash
+and the hash specified in the file, then you immediately discard that part and request it again from
+another node. And you can optionally remove the sender , that is, the original node that sent you
+this particular part, because it could be an attacker, right? So you remove it from your node list
+and no longer want to receive any information from it. Now, before we delve any further, I wanted to
+take a quick break. I want to tell you about Algorok—a platform that I created where, if you're a
+senior engineer, a staff engineer, or, let's say, a lead engineer or architect, this is the place to
+come to start your learning. You can join the platform for just $9 per month, and you can get full
+access to it for just $15 per month. There is also another part of this platform called the
+"academy", where practical courses are held where you learn to build such systems. But from a system
+design perspective, the cost of lifetime access to a “live” cohort is about $2,400. This only
+happens once or twice a year, and this year it already has. However, all this content is available
+for a third of the price—$799 for lifetime access. And this is, in fact, 12 deep sessions of 4 hours
+each, where we will solve complex problems in system design together. And along with this lifetime
+access, you also get 3 years of access to the architectural platform. So if you are interested, be
+sure to visit algorok.io. I will leave a link in the description to this video. Good. Now let's talk
+about another interesting problem. When you download a file from the BitTorrent network, you already
+know that you are downloading it in parts. But should I download parts of this file sequentially:
+one part, then the second, third, fourth, and so on? The answer is not really, because it leads to
+three separate problems. So let's see how each client decides which part to download next. The first
+problem that arises here is that if everyone downloads in a certain order, then all network
+participants, i.e. all peers, have the same initial parts. So, peers have nothing to exchange with
+each other. And you can see it here: all these peers have exactly the same parts, and no one has the
+remaining parts of the file. So how can they access these parts of the file if no one on the network
+has them? The second problem is that all the requests are directed to later parts. By "later parts "
+I mean that there are some beginning parts and ending parts in the file. And most of the engineering
+difficulties are associated with downloading these parts of the data , because if everyone downloads
+sequentially, like 1, 2, and 3, then few people will have them , and if these peers are
+disconnected, then no one will have these parts to provide. Actually, this is what I was explaining,
+and going back to the second problem: it is that all requests for later parts are focused on the
+sider, which becomes a " hot spot". A " hotspot" means an excessive number of requests, and we don't
+want that because we don't want bottlenecks, which is what we're trying to reduce with BitTorrent.
+And that's why we had the theory that every pore also becomes a seder, right? And if we have
+bottlenecks, it defeats the very purpose of creating BitTorrent. And the third problem is fatal to
+the network, because in our example with sequential download, if the main seeder, which has all the
+parts of the file , say the beginning and the end, goes offline, then the beginning parts of the
+file will exist in thousands of copies, which is fine, but the later parts will not be available to
+any of the peers, which means that the file will remain incomplete forever. If you've downloaded
+torrent files before, you've probably encountered the download getting stuck at 99%. This happens
+when there are no sources left in the distribution for the remaining parts of the file. So,
+BitTorrent actually has a very clever mechanism. It uses the opposite strategy : each participant
+tells the others which parts of the file they already have. Your client, i.e. the program on your
+computer, keeps track of how common or rare each part is. Therefore, he always targets the rarest
+parts first. First, it loads these rare fragments, and only then moves on to the most common ones.
+By "common" I mean that these parts are available to many network members, while rare parts are
+available to only a few individuals. This means that the rarest or least replicated part is always
+copied first. Thus, the availability of parts in the network levels out over time. This means that
+if one part is rare and the other is common, your client will record which one is scarce. So, it
+will start downloading from there. Ultimately, this leads to the situation in the network leveling
+off. Everything becomes even. Essentially, the seed only needs to download each part once so that
+the network can continue to propagate it infinitely. This is how the network survives, even if the
+seed leaves it. Looking more broadly, the main principle of the system design is that each
+participant cares about the health of the entire network. This means that instead of quickly
+collecting the most common parts, each customer focuses on the rarest ones. As I have already shown,
+the degree of prevalence of parts in the network is leveling out. Each participant cares about the
+health of the entire network , not just their own upload, right? It turns out that throughout the
+entire loading process, these two goals coincide. If a participant cares about the health of the
+network, then thanks to its stability, he will eventually successfully complete his own download.
+So, both goals appear to be the same throughout the process. That's why it's a great systems design
+principle. However, there is one exception to this rule. The very first fragment that a client
+downloads is chosen randomly, not as the rarest, because a new participant needs to get something to
+exchange as quickly as possible , and rare fragments are by definition slow to download. So, the
+first fragment is always chosen randomly, but after it is received, the principle of " rarest first"
+comes into play. There is another clever scheduling trick that solves the problem that occurs right
+at the end of the download. Usually, most of the file loads quickly because you are receiving
+different pieces from many participants at the same time. But in the end, there are only a few
+blocks left, and if one of them is on a slow node, then the entire download stops waiting for that
+one machine. BitTorrent's solution for this is what 's called " endgame mode." So when there are
+only a few blocks left, the client requests them from multiple participants at the same time. The
+first copy received is accepted and the remaining requests are canceled . This means that there will
+be a small amount of duplicate traffic , but it prevents the entire load from being held hostage by
+a single slow node. So, the idea is simple. When you are 99% done downloading, bandwidth becomes
+cheap and waiting for the last fragment becomes expensive. So, now you understand the basic
+mechanism of how the BitTorrent network works. Now we'll look at a few more optimizations, but let's
+go through them a little faster, because now you'll understand it all better with the foundation
+laid. But if something remains unclear, just watch this part of the video again. One of the main
+problems in the BitTorrent network is the so-called " free-riding". As you know, downloading a file
+consumes bandwidth, and with a metered connection, it costs money. Therefore, rational behavior is
+to download everything and give nothing away. This is exactly what all participants want. And this
+is the definition of " freelancing". So, a “ freeloader” is a participant who only wants to download
+everything, not wanting to give anything in return. Before BitTorrent, there was another popular
+peer-to-peer network called Gnutella, or simply Gnutella. A 2000 Gnutella study found that almost
+70% of users did not share files at all. So, 70% of users were only downloading. They didn't share
+any files at all. And the top 1% of active hosts accounted for almost half of all responses. Thus,
+the decentralized Gnutella network began to turn into a small group of volunteer servers that "
+pulled" everyone else on their shoulders . So, essentially, a few volunteer servers wanted to upload
+files, while everyone else just wanted to download them. This effectively turned into a regular
+client-server topology, but without its guarantees, which meant the worst of both worlds. So, you
+don't get the guarantees of a traditional client-server architecture and you don't get the
+decentralization of a P2P network like BitTorrent. The problem here is that BitTorrent has no
+central authority. So there is no account that can be blocked. There is no administrator to
+intervene, and there is no way to prevent someone from changing the client itself. Therefore,
+enforcement should be built into the protocol itself. So BitTorrent goes a step further. It makes
+uploading the only way to get good download speeds. BitTorrent calls this " tit-for-tat," which is
+taken from game theory, and I'll talk about it in a minute. Here's how it works. Each client uploads
+data to a limited number of nodes at a time, by default it is about four upload slots. A node in the
+network can refuse to send data to another node, and this is essentially "freebie" 101: I will only
+download the information , but I will not send it to the other node, just keeping the connection
+open and sending a message about the presence of a fragment. It's a message like, "Hey buddy, you'll
+get this snippet from me next." But instead of sending this snippet, I'll send nothing. So, I won't
+be sending any files in the end. This is called " choking". I'm just telling the other node, by
+keeping the connection open, that I'll send it the next part of the file, but I'm not sending
+anything. This is called " jamming". Of course. To counteract this, every 10 seconds each client re-
+evaluates all of their partners. This is what BitTorrent built into the network so that no one can
+"jam" others. Every 10 seconds, each client re-evaluates all of its partners, ranks them by the
+download speed they recently provided, unlocks the best four, and "jammes" the rest. So , the upload
+speed that a node provides determines the amount of feedback it receives. Nodes that load quickly
+receive reciprocity from their neighbors, while those that do not load anything are " jammed" by all
+their neighbors in turn. And, as I mentioned, this is a repetition of the “tickle for a tit”
+strategy from game theory: first cooperate, then mirror the other party’s behavior. In Axelrod
+Prisoner's Dilemma tournaments, this strategy has proven to be more effective than much more complex
+ones. And Cohen's article builds on this result directly. It is interesting to note that there is no
+reputation database, no account history, and no moderation whatsoever in this entire network.
+Enforcement arises directly from the protocol itself. But if we rely only on the pure strategy we
+just saw, there is a bootstrap problem , because think about a new peer joining the network. This
+new pir now has zero file parts. He doesn't have any part of the file yet, does he ? It simply
+connects to the network to download the file. Now zero parts means he can't provide anything to give
+back. It can only provide zero recoil velocity. And zero return means every neighbor will block it
+because they'll think, "Hey, it's a pir and it's not loading anything." So why should we let him get
+all the benefits or download all the files? As we saw in the previous section , neighbors start
+blocking, uh, peers start blocking this peer, right? So, if every neighbor blocks this peer, it will
+never be able to get the first part to exchange. This means that the network cannot accept new
+participants. So there will be no new participants or new peers that can join the network, because
+when they join, they have zero pieces of files to give back, and so they give back zero. Peers see,
+"Okay, this guy isn't giving anything away, let's start blocking him because he's probably a
+freeloader," because it's kind of built into the protocol, right? But there is a solution: every 30
+seconds, each client allocates one of its return slots to a randomly selected peer, regardless of
+speed. So it doesn't matter what its recoil speed is or how this thing works. They will randomly
+choose a different peer every 30 seconds, and this is called " optimistic unlocking," which serves
+two functions. First, it helps new peers get started. Within a very short time, some peers already
+on the network will, thanks to a random slot that opens every 30 seconds, provide this new peer with
+its first share. After that, once they have the first part, you already know that when the new peer
+has the first part and checks it, they are ready to start a reciprocal exchange or start a return.
+So then reciprocity comes into play , and everything will be fine. The second is the search for new
+partners. So, a random slot sometimes finds a node with an uplink that is faster than any of your
+current four. Let's say I'm already a member of the network, and since I need to change nodes every
+30 seconds, I choose one random node from new or existing ones in the network. Thanks to this, I can
+find a faster node than the ones already there, and that node gets a permanent slot due to its
+performance. So, it's a kind of merit-based system. Now, if I see that this new node is running
+faster than my current ones that were already on the list. Then it will become my permanent node on
+merit as it is much faster than the previous ones. In terms of reinforcement learning, this is the
+exploration step in the “exploration- exploitation” cycle. If you have experience in machine
+learning or reinforcement learning , you know this “ research- exploit” cycle. It's exactly the
+same. And without this mechanism, the stimulation system would not be able to accept a single new
+node. But with it, the system becomes self-starting. It helps launch new nodes joining the network.
+OK. I keep mixing up the terms: nodes, peers, and neighbors. I mean the same thing. It's just a
+server that's connected to the network . It's the same. So, we've looked at many of the solutions
+that BitTorrent has implemented , such as solving the integrity problem using hashes. They solved
+the scheduling problems by implementing the "sparest fragment first" algorithm we've seen. And they
+solved the incentive issue with the "you give me, I give you" strategy and the optimistic unlocking
+that we just looked at. But there is something that still remains unresolved: detection. While we've
+covered all of these issues, there's one more part we need to talk about—the tracker. As of 2005,
+each swarm on the BitTorrent network still depended on its own tracker. So there was a central
+tracker, and its job was trivial: it just kept a list of peers, right? How many servers and which
+servers are present in the network. But when it's not working, if that tracker fails, new peers
+can't join and existing swarms can't be found. So this central server is not only a single point of
+failure from a technical point of view, but also from a legal point of view, since it has an
+operator, an IP address, and a hosting account, which is why trackers are often shut down by the
+authorities. The BitTorrent network faced an engineering challenge : to decentralize the search for
+participants so that it did not depend on a central tracker server. In 2005, BitTorrent solved this
+problem with the so-called mainline DHT. DHT is a distributed hash table built on a 2000 protocol
+called Kademlia. Let's try to figure out how it works. You already know what a hash table is. You
+just give it the key and it stores the value. A distributed hash table works the same way, only the
+table is distributed across millions of independent computers, rather than stored on a single
+server. In BitTorrent, the key is the torrent's info-hash —another name for the SHA-1 hash of the
+torrent's metadata—and the value is a list of participants distributing that file. And here we face
+a real system design problem . If the table is distributed across millions of machines, which one
+should store the keys? Since there is no central coordinator, Kademlia solves this with two ideas.
+First: each node, when connected to the network, chooses a random 160-bit identifier. Second: each
+torrent already has a 160-bit identifier—the SHA-1 hash of its metadata, known as the info-hash we
+already talked about. This means that nodes and torrents use the same numbering scheme, which leads
+directly to Kademlia's storage rules. The nodes whose IDs are closest to the torrent's info-hash are
+responsible for maintaining the list of participants for that particular torrent . So far we've
+talked about complete decentralization, but there's one centralized artifact left—the torrent file
+itself. It is hosted on various sites from where we download it, but an extension to the protocol
+called "metadata exchange" has helped eliminate this. As you remember, a torrent file contains
+metadata. Now, thanks to metadata sharing, users can transfer not only parts of files to each other,
+but also metadata. The loader checks them against the info- hash just like any other part of the
+file. So, the minimum requirement to join the giveaway is just an info- hash, which is a
+40-character string. Now you don't need a torrent file. If you have this info hash, you can start
+loading data immediately. This info-hash is usually available in the form of a link, called a magnet
+link. And I'm sure you've already seen this magnet link in many places if you've downloaded a
+torrent file. So, this magnetic file can later be used to create a torrent file. Therefore, you
+don't necessarily have to share a file with a .torrent extension that contains metadata. So, all the
+metadata fragments that can be downloaded using this magic link can later be used to create a
+torrent file. So you don't need a torrent file to join the swarm. You can simply get started with a
+magic link that helps you download the metadata needed to create the file later. So, you have
+essentially decentralized the torrent file itself. It no longer needs to be hosted on the website,
+because even if this file is deleted, you can still do everything with just the magic link. And
+that's what makes the BitTorrent network so powerful. Now let's look at the full timeline of
+development. In 2001, all you needed was a website, a file with the .torrent extension, and a
+tracker. In 2005, DHT replaced the tracker, and then metadata sharing replaced the .torrent file.
+And finally, now you just have a magic link with a 40- character hash. The transition from this to
+this, and from this to this seems insignificant. But in fact, the underlying architecture has
+completely changed. A regular URL points to a location that is usually tied to a server, and servers
+can go down all the time ; A magnet link points to the content, not the server address. It points to
+data, and that's why any other node in the network that has that data can provide it to the
+requesting node. That's how you finally got rid of the last centralized element, which was the file.
+And that's why an AI lab can now release a model by simply publishing a 40-character string; the
+identifier is enough and the network decides the rest. And that's why it's called a magic link,
+because it really works like magic. There was another big problem in the early stages of
+BitTorrent's development that actually affects the systems we still use today. Let's see how it
+worked and how they solved it. So the problem was how BitTorrent traffic coexisted with other
+traffic within the same connection. This means that, let's say, you run a torrent client on your
+computer, and it will eventually degrade everything else on your network, like video calls, gaming,
+browsing—all of which will suffer if you plan to use BitTorrent on your network. The reason is not
+that BitTorrent consumes more net bandwidth . This was a phenomenon called "buffer bloat" . To
+understand why this happens, we need to look at how TCP allocates bandwidth. TCP does not know what
+the capacity of the network channel is. Therefore, he determines it experimentally. It continues to
+transmit faster and faster until the network starts dropping packets, and only when packet loss
+starts does TCP realize it has gone too far. But the problem is that home routers don't drop packets
+immediately. First, they buffer the packets. So before TCP sees packet loss, these buffers are
+filled completely. And every packet, whether it's a BitTorrent transfer, a video call, a game, or a
+web page, eventually queues up. A torrent client usually supports dozens of TCP connections
+simultaneously, and this is due to the peculiarities of the protocol's operation. It simultaneously
+downloads data and distributes it to other users. Therefore, together they constantly keep the
+router's buffers full. The channel has not exhausted its bandwidth. It is actually overloaded with
+packets waiting in the queue, and this queue delay can grow to seconds. So the BitTorrent solution,
+introduced around 2009, was to stop waiting for packet loss altogether, and instead a new transport
+protocol called UTP started measuring queue latency. Packets contain timestamps, and once the one-
+way delay exceeds approximately 100 milliseconds, the sender reduces the speed before the router
+buffers fill up and interactive traffic is affected . And there is another clever property of UTP.
+Since TCP is still more aggressive, it naturally wins when the channel becomes busy. And that's
+exactly what UTP was designed for. It behaves like a background task. It only uses free bandwidth
+when it is available and immediately yields to TCP when higher priority traffic that TCP is serving
+appears. And this idea turned out to be quite influential. It was standardized by the IETF for the
+rest of the industry under the name Leadbat. Today, the same congestion control algorithm is used
+for background transfers such as Windows Updates and Apple Software Updates. And the congestion
+control mechanism developed for BitTorrent is now built into major operating systems like Mac and
+Windows. This architecture is actually used in many other places. In 2010, Twitter used BitTorrent
+internally to deploy updates . They were able to reduce deployment time from 40 minutes to just 12
+seconds by having each server reserve chunks as they were loaded. Facebook used the same idea to
+send large binary files to tens of thousands of machines, prioritizing nodes in the same rack to
+localize traffic. Blizzard created a BitTorrent- based patcher for World of Warcraft because patch
+release day is a perfect example of the " crowd effect," where millions of players download the same
+files at the same time. So, Kraken from Uber in 2018. By the way, if you don't know how Uber
+actually works, I'm also planning to make a video about Uber's system design . So, Uber began
+distributing Docker images across clusters of thousands of hosts using peer-to-peer (P2P)
+replication. Microsoft's Delivery Optimization uses the same principle to push Windows updates to
+over a billion devices. And today, this pattern has become relevant again for AI. The models weigh
+tens or even hundreds of gigabytes, and the peak demand occurs in the first few hours after release.
+So Mistral, a very popular company with open source models, distributes them via magnet links,
+allowing the community to share bandwidth instead of centralized payment. Even a great technology
+like BitTorrent has its tradeoffs, and that's the sad side of engineering: no matter how cool a
+technology is, it will always have some flaws. So, the first compromise is the lack of privacy.
+Membership in the swarm is public: to upload data, a node must declare itself, and any participant
+can join and record every IP address they see. The same openness that search provides now makes the
+list of participants visible. The second is the priority of bandwidth over latency. We've already
+looked at the "rarest segment first" policy, right? As you know, " sparest first" is the opposite of
+sequential loading. Therefore, the protocol is poorly suited for streaming, because the segment that
+the viewer needs next is rarely the one that the swarm will replicate, as each client is optimized
+to find the rarest fragment, rather than loading it sequentially. Third, availability depends on
+demand. The “ crowd effect” is a strong scenario, but once demand drops, availability depends
+entirely on whether nodes decide to continue distributing . And fourth, open membership has a
+downside. DHT accepts any node, but that node could be an attacker who runs thousands of fake IDs to
+skew search results or poison records, which is called Sybil attacks. Sybil attacks are the most
+common type of attack on decentralized networks. If you don't know how they work, you can watch any
+YouTube video on the topic. There are hundreds of videos about Sybil attacks. So, there are five
+takeaways you can take from this video for your own systems. So, the first thing is to make demand
+determine supply. The BitTorrent protocol ensures that you start sharing as soon as a new node joins
+the network and receives its first fragment. The second principle to learn is that incentives are
+part of the BitTorrent architecture. BitTorrent has implemented throttling and optimistic
+unthrottling mechanisms to encourage users to continue sharing . The third point, which I find most
+interesting, is that they were checking the content, not the channel or the node. Instead of
+authenticating the node or participant entering the network, they decided to verify the content
+itself. When data can verify itself, as BitTorrent does with hashes, you can use any path to deliver
+it, such as untrusted mirrors, caches, or nodes. The fourth point is optimization of the entire
+system, not just a single node. The BitTorrent protocol ensures that nodes download "recipes" first,
+which ensures the health of the entire network . Eventually, as we discussed, both goals begin to
+converge. The health of the swarm becomes the health of the node itself, because the node wants to
+be able to download all the shards quickly, right? The fifth point relates to LEDBAT and UDP, which
+we saw: don't make every workload compete on equal terms. Background tasks can be configured to only
+use leftover bandwidth, as UDP does, instead of competing with important traffic, such as video
+calls handled over TCP . This is exactly what we saw in the case of LEDBAT and UDP. The main idea
+behind BitTorrent is that every downloader is also a sender, and the BitTorrent protocol does a lot
+to ensure that these pieces are available. Therefore, a node can make its contribution within
+seconds of joining. Peerie hashes make it safe to exchange with untrusted nodes , and the "
+sparseest first " strategy ensures that every fragment is copied. Tit-for-tat contributes to the
+common cause with a rational strategy. A distributed hash table eliminates centralization, and UDP
+allows the entire system to coexist with the rest of the network traffic. If you saw my video about
+Snowflake, it's the same conclusion, but from a different system: great architectures don't maximize
+functionality, they maximize impact. So a protocol like BitTorrent, which is not backed by any
+company, once carried a third of all internet traffic, and its mechanisms now run in Windows, in
+Uber's deployment pipelines, and in how advanced models reach the world. So my idea is that the next
+time you hit a scaling wall, say, when building software for millions of people, and the only option
+seems to be to install a more powerful server, just stop and ask, "What protocol is this all built
+on?" That is, where is the unused capacity that is already hidden in my demand? How can I change the
+protocol and rules by which my system operates? And this is the type of thinking that I delve deeply
+into in the Algorok cohort or on the Algorok platform, all of whose content is available by
+subscription for just $15 per month. Creating such in-depth analyses requires a lot of reading,
+research, and effort. So please don't forget to subscribe, like, and share. It takes me a few days
+to study all this and build diagrams, and then a few more days to do the actual shooting. So you
+probably noticed me changing shirts in the middle of the video because I'm taking them off over the
+course of a few days. So, see you in the next video, but don't forget to subscribe, like, and share
+this video with your friends. OK. Thank you very much.

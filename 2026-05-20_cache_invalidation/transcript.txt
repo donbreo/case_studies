@@ -1,0 +1,184 @@
+Now, you probably know what a cache is and how it works and how to cache data. But, there's a huge
+problem in working with caches, which is for how long do you keep the data in the cache? And how do
+you know that there's new data that can be cached? And also, how do you know that the data that's
+there in your cache is invalid or stale data? And if you show the stale data to your users, it will
+break the experience. And this is the cache invalidation problem. Now, if you've ever set a TTL or
+time to live field on a key in the Redis cache, like for example, 5 minutes or 1 hour or anything
+like that, you've made a deal with your users. You've told them your data might be up to 5 minutes
+stale and I'm okay with that. And for a lot of cases, that's fine. But, for some cases, like product
+prices, inventory counts, user permissions, that staleness is a real problem. And this leads us to
+cache invalidation, which is what today's video is all about. Now, cache invalidation is the act of
+telling a cache that the data it's holding is no longer valid. So, it stops serving the stale copy
+and fetches the fresh one. Now, here's the thing that most engineers don't realize. Cache
+invalidation isn't just about TTL and there's much more to it. By the way, this video is part of the
+intermediate system design playlist on my YouTube channel. Do watch all the videos in that playlist.
+And I also have a beginner system design series as well. If you binge watch both of these playlists,
+you'll know system design better than 99% of the people on the planet. And the reason I brought this
+up is because there's this video called the caching at multiple stages video, which is in the
+beginner system design playlist. And if you've watched that series, you'll remember that caching is
+actually happening at every layer of your architecture. Your CDN is caching, your browser is
+caching, your application has an in-process cache, and even your database has a buffer pool, and
+that's essentially a cache. So, what's actually happening is that each of these layers has its own
+staleness characteristics, its own invalidation mechanisms, and its own failure modes. Understanding
+cache invalidation deeply is one of those skills that separate an engineer who can build a prototype
+from one who can run a production system. Because caches are one of the reasons that your system is
+fast, and stale caches are the reason your users see wrong data. Now, here's a map of what we'll
+cover in today's video. We'll start with the caching patterns themselves, like cache aside, write
+through, and so on, because the invalidation strategy depends on which pattern you're using. Now,
+you might probably know that these patterns are actually quite huge topics in themselves, and if you
+don't know how these work, that's not an issue. We will cover them individually in detail in future
+videos, but for now, we'll just get a quick working knowledge about them. After that, we'll go
+through four invalidation strategies: CDC-based, tag-based, version-based, and stale-while-
+revalidate. Then, we'll tackle the thundering herd, a failure mode that every caching system hits
+eventually, and finally, multi-layer cache consistency, because in production, you're never dealing
+with it just one cache. So, let's start with the patterns first, because everything that follows
+depends on which one you're using. Cache aside is what most teams use. Your app checks the cache. If
+it's a hit, then it just returns the data. If there was a miss, then it'll read from the database,
+and then write the results back to cache, and only then return it. And we're familiar with this
+pattern, because this is the usual pattern that we've seen so many times before. But the key thing
+here is that the cache has no idea when the underlying data changes. It's your job to tell it.
+That's the invalidation problem. Then, we have the write-through pattern, which writes to both the
+cache and the database simultaneously. This means that the cache is always fresh, and there's no
+staleness. But this also means that with every single write, you pay the cache update cost, which is
+all right, but if your use case requires you to write way more than you read, you're doing wasted
+work keeping the cache warm for data that nobody's reading. For most production systems, we use
+cache aside, and with cache aside, the question becomes when the database changes, how does the
+cache know? Now, like I said, we'll cover all three of these patterns in much more detailed in the
+coming videos. For this video, I just want you to focus on cache aside, okay? And coming back to the
+question that I just asked you, when the database changes, how will the cache know that the data has
+changed? The simpler answer that you might be exposed to would be a TTL or time to live. So, you set
+a timer and when it expires the cache entry vanishes. Now, that works, but it forces a hard trade-
+off. A long TTL means serving stale data for hours, and a short TTL means constant cache misses that
+defeat the purpose. So, the better reframing of this question is that what if the cache could find
+out about changes the moment they happen instead of waiting for a timer? And that's exactly what
+change data capture does. So, CDC is change data capture for short, and it captures the actual
+change from the database's write-ahead log, which is the same log that the database uses for crash
+recovery and replication. Now, the question is how do we get from a row change in Postgres to the
+cache key is gone from Redis? Firstly, you need something sitting at the database end reading that
+write-ahead log and translating it into change events. And that's what a tool like Debezium does.
+It's a connector that tails the write-ahead log and emits a structured event every time a row is
+inserted, updated, or deleted. It turns database changes into a stream. But, a stream needs
+somewhere to go. You don't want Debezium talking directly to your cache invalidator because if the
+invalidator is down, you lose changes. So, these events get published to Kafka, which acts as a
+durable buffer. Events sit there safely until a consumer picks them up. Now, on the other side, you
+have a small invalidation consumer, which is a service whose only job is to listen to the Kafka
+topic. It's also going to figure out which cache keys each change will affect and then send a delete
+command to Redis. So, the full pipeline looks like this. You have your application which writes to
+the database. Now, the database has a write-ahead log or WAL, and Debezium reads it, publishes it to
+Kafka, and your consumer reads it from Kafka topic, and Redis gets the delete command. So, there are
+these four stages, but each has its own place. Debezium because somebody has to read the log, and
+Kafka because you need durability between the producer and consumer, the consumer because cache
+invalidation is its own concern and shouldn't live inside Debezium, and Redis is just where where
+cache happens to be. So, you might feel that having these four stages will increase latency. It's
+not the case. It's just 50 to 100 milliseconds. It's not like in minutes. It's just milliseconds.
+So, from a practical use case point of view, Shopify actually uses this for their storefront. So,
+whenever there's a product update or a price change, inventory adjustment, description edit, all of
+that flows through CDC to their cache layer. And the caches are effectively always fresh because
+invalidation is triggered by the actual data change, not a guessing game. So, CDC, which is change
+data capture that we learned about right now, tells you which record changed. So, for the obvious
+case, the user directly looking up that record, you know exactly which cache key to purge. But,
+here's a problem. Applications don't just cache records. They actually cache views that were built
+from records. An example of this would be the user's profile page, okay? Which will have their data
+combined with their three most recent orders. Or their homepage feed, which includes that user in a
+list of top contributors. Or the admin dashboard, which shows that user in a filtered search result.
+So, when a particular record changes, like for example, data of that user, all of those derived
+views that we talked about, the user's profile, homepage feed, and the search result in the admin
+panel, all of those derived views are now stale as well. And CDC has no idea that they exist. So,
+how do we solve this problem? And this is where tag-based invalidation comes in. So, let's say
+product number 123 changes, and you need to purge the product page cache, and that's obvious. But,
+you also need to purge the category listing that includes that product. And the search results also.
+And also the recommendation widget. And the related product section on other pages. Now, with key-
+based invalidation, you don't need to know every single cache key that depends on product 123
+because that's very difficult to maintain as your system grows. And tag-based invalidation flips
+this. When you cache any view that depends on product 123, you tag it with product 123. So, when
+product 123 changes, you purge everything with that tag. So, just one call, and it's complete
+invalidation. And Cloudflare CDN uses exactly this. They call them surrogate keys. One purge request
+clears hundreds of related assets across the global edge network. Now, CDN tags solve the freshness
+problem. But, there's another invalidation approach that's so simple that almost feels like
+cheating. And we'll talk about that in just a second. Now, before we continue, I want to take a few
+seconds and go a bit off topic and tell you about the Algorock cohort. It's a live cohort that I
+usually run with 10 to 15 senior engineers in a cohort. And you might know that there are no cohorts
+that exist for senior engineers who already know the basics of architecture and system design and
+are wanting to build the next generation production software in the post-AI world. Cool. This is a
+12-weeks cohort program and we cover topics like advanced system design, AI native system design,
+architecture for the post-AI world, and tips and tricks to using AI coding tools but from a senior
+engineer perspective. So, I'm planning my next cohort, which is going to be my third cohort
+actually, and it's going to be around mid or end of May 2023. So, I want you to go through the
+algorock.io website, which is algorock.io website, and I want you to go through these topics that
+we're going to cover. And if you like this, you can fill up the form that opens up when you hit the
+enroll button. And once you fill up that form, I'll check to see if you're a great fit, and then
+we'll set up a call with you. So, it's about $2,500 for the live cohort, and I teach the cohort
+personally. It's a great experience. And once you fill the form, you can also talk to any of the
+people who have attended the cohort previously and then decide if you want to go ahead. But, if you
+just wanted access to pre-recorded cohort videos, that's just $800. Okay, so now let's talk about
+version-based cache keys. Instead of invalidating a key, you change the key itself. So, product 123
+version 5 becomes product 123 version 6. The old entry is still in the cache, but nobody asks for it
+anymore. It just naturally expires when its TTL runs out. So, no invalidation logic is needed. So,
+you track the current version in a small Redis key or a database column. On read, you first get the
+version number, then construct the cache key. On write, you increment the version. And GitHub uses
+this for their static assets. JavaScript bundles include a content hash in the file name, and when
+the code changes, the hash changes, and the old file becomes unreachable. The elegance is that
+there's zero purge logic. But, like with all amazing approaches, there is always a trade-off, and
+the trade-off here is memory. So, old versions linger until TTL, and if your cache is tight on
+memory, that's wasteful. But, if you have headroom, it's the simplest correct invalidation strategy
+that there is. So, now we've learned a few strategies on keeping caches fresh. But, what happens at
+the moment that a popular cache key expires, regardless of which strategy you use. So, let's learn
+about something called as the thundering herd problem. So, let's say a popular key expires. A
+popular key is something that gets accessed very often, like your home page product listing or
+something on your pricing page. And at the moment of expiry, a thousand concurrent requests all see
+a cache miss at exactly the same time. All thousand hit the database simultaneously, and the
+database, which was happily serving 50 queries per second behind the cache, gets a thousand
+identical queries in 1 second, and it crashes. Amazon has publicly discussed this problem with their
+product pages. Without mitigation, a popular product's cache expiry would crash their database. But,
+there are three fixes for this, and these three patterns are really worth knowing. The first is a
+mutex lock. If you come from Go lang background, this is very simple to understand. So, when a cache
+entry expires, the first request that comes in grabs a lock and redoes and starts rebuilding the
+cache. Every other request that comes in while that's happening, they just wait. And when the
+rebuild finishes, the lock releases, everyone reads the fresh value, and you're done. One database
+query, and everybody walks away with fresh data. And that's clean. The catch is what happens when
+the rebuild is slow. If that one query takes 2 seconds, you've now got a thousand requests sitting
+in a queue behind it. Your cache is fine, your database is fine, but your latency just fell off a
+cliff. So, that's why the second pattern is called stale while revalidate. And this one's smarter.
+When a cache entry expires, instead of blocking everyone while you rebuild, you just serve the stale
+value. And meanwhile, one request in the background goes and refreshes the data. So, users get data
+that's a couple of seconds old and then quietly it's fresh again. So, the database never sees a
+spike and nobody waits and this is what CDNs have been doing for years. And honestly, it's what I'd
+recommend for most use cases. The third one is the cleverest and it's called probabilistic early
+expiration and here's the idea. Every request has a small random chance of refreshing the cache
+before it actually expires and most requests do nothing. But once in a while, one of them decides to
+be the refresher. And if you've got enough traffic hitting a key, someone always refreshes it just
+before the TTL runs out. expiry event never really happens. No locks, no coordination, no thundering
+herd. Works beautifully for hot keys and hot keys are basically keys that are often accessed from
+the cache. But obviously, there's a trade-off here as well because for low traffic keys, this is
+unreliable. You might go a while without any requests rolling the dice in your favor and then you're
+back to a cold cache. So, three tools, three different trade-offs. Mutex is simplest but bottlenecks
+on slow rebuilds. Stale while revalidate is my default and probabilistic works great at scale but
+falls apart when traffic is thin. Now, so far we've been talking about caching like it's just one
+thing. Like there's just one Redis instance or just one set of keys and you simply read the key and
+move on. But in production, that's almost never the architecture. What you actually have is caching
+in layers and the fastest layer is inside your application process itself. So, it could be a hash
+map in memory or caffeine if you're in Java or LRU cache if you're in Python. This is your L1 cache
+and it is fast. We're talking about microseconds to read a value because there's no network hop, no
+serialization, and no TCP round trip. This value is just sitting in the memory right next to the
+code that needs it. Below your L1, you have L2. That's your Redis or Memcached or whatever
+distributed cache your team uses. Now, it's slower than L1 because now you're going over the network
+but still sub-millisecond and shared across every instance of your application. And sometimes, above
+all of this, you have a CDN caching all these responses at the edge which is the closest to the user
+and farthest from your database. So, there are three layers, each one faster than the one below it
+and each one shielding the layer underneath from load. Now, here's where it gets interesting. Let's
+say a row changes in your database and your CDC pipeline fires and it leads to that key at L2
+getting deleted and that's awesome. But, what about L1? The L2 invalidation did not propagate, which
+means we're still serving stale data to users and we'll keep doing it until the local L1 entries
+expire on their own. The fix for this is called invalidation propagation. So, when you invalidate
+something in L2, you also publish an event on Redis or Pub/Sub or on a Kafka topic and every
+application instance subscribes to that event stream and when the event arrives, each instance
+clears its local L1 and now you're actually invalidated everywhere. So, here's the one mental model
+I want you to take away. Cache invalidation is not a problem you solve once, it's a spectrum of
+trade-offs you choose from. TTL is the simplest but stillest. CDC gives you near zero staleness but
+adds infrastructure and tags give you complete invalidation but need index maintenance. Versions
+give you zero parse logic but waste memory and every system needs a different combination and the
+right combination depends on how much staleness your users will tolerate. The full article with
+implementation code is on algorok.io and you can check it out. And I'm sure you appreciate the
+amount of effort it takes to make these diagrams and make these videos. So, I want you to subscribe
+to this channel and share this video with others and make sure you like this video and if you have
+any questions, please comment so that I can answer them. All right, I'll see you in the next video.

@@ -1,0 +1,382 @@
+In this video, we will reverse engineer one of the most advanced distributed systems ever
+created—the Starlink satellite network. This video is important because you can spend 20 years
+learning routing protocols like OSPF or BGP, but the Starlink architecture will still surprise you,
+because the routing protocol here is orbital mechanics. If you've been designing distributed
+systems, this architecture is worth studying, not because you plan to launch satellites, but because
+Starlink solves one of the most difficult engineering challenges by changing the very nature of the
+problem. There are currently over 7,000 Starlink satellites in orbit, each traveling at about 27,000
+km/h. This means that they orbit our planet every 95 minutes, and over 5 million homes, ships, and
+planes receive internet through these satellites. So, the internet is built on a very simple
+assumption. It is that routers do not move, and they should not move. The switches remain in their
+racks, and the fiber optic lies in the ground. Therefore, if the network topology changes, it is
+only because something went wrong. For example, it could be a router failure, a cut cable, or even a
+reboot. And we created routing protocols like OSPF and BGP to detect these failures, exchange
+updates, and eventually negotiate a new network map. Modern routing assumes that changes are
+episodic and unpredictable. But Starlink violates every one of these assumptions of traditional
+routing. In Starlink, the topology never stabilizes, and each router in the network orbits the Earth
+at a speed of 7.5 km/s. So satellites appear above your horizon, cross the sky, and disappear in
+just a few minutes. And the connections between all these neighboring satellites are constantly
+being made and broken as orbital geometry changes. For any conventional terrestrial network, this
+would be a routing nightmare. But orbital mechanics has one property that terrestrial networks do
+not have. It is that orbital mechanics is deterministic. With orbital elements, the position of each
+satellite at any point in the next week can be calculated today with an accuracy of a few meters. So
+instead of detecting the topology or structure of the network after it changes, SpaceX actually
+calculates the topology before it changes and distributes all that information as a graph. In this
+video, we will look at seven different aspects that will help us break down the Starlink
+architecture in detail. First—why do Starlink satellites fly at an altitude of only 550 km above
+Earth? And we'll look at that because this particular solution reduced latency from 600ms to about
+30ms. But it also turned the entire network into thousands of routers that never stop moving. And
+thus created all the network problems that we will analyze in this video. Secondly, we'll talk about
+the Starlink dish on your roof, because it tracks an object moving at 7.5 km/s, without having any
+moving parts. And the most amazing thing here is that she never looks for a companion. She already
+knows where to head to reach the companion. The third point concerns who decides which companion
+will serve you. Every 15 seconds, the central scheduling module lists satellite assignments to users
+across the entire Starlink system. And we will analyze this in detail. Fourth , why doesn't Starlink
+use routing protocols like OSPF or BGP? The future is predictable in this network . So instead of
+figuring out routes, Starlink relies on orbital data called ephemeris—a graph of where each
+satellite will be in the near future. And it uses this to calculate routes before the network
+topology changes. Fifth, we will look at how the Starlink laser network actually works. Over 9,000
+optical channels connect the network, and how is it possible to maintain these connections while the
+satellites themselves are moving at a speed of thousands of kilometers per hour? Sixth, we will
+analyze why sending a packet into space can be faster than transmitting it on Earth. And I have a
+clue: it all comes down to the fact that light travels much faster in a vacuum than through glass.
+But we will look at this in more detail. The last thing we'll talk about is why your SSH session,
+Zoom call, or TCP connection never notices that the network underneath them has completely changed.
+While your packets may be switched between satellites every few seconds, your IP address never
+leaves the ground. And nothing has changed for the Internet. And we'll see exactly how it works.
+This video is for senior and lead engineers, network engineers, or basically anyone who works with
+distributed systems professionally . Because this system is different from the others we've looked
+at, SpaceX publishes very little information about the internals of Starlink. So this video is
+compiled from published research from the measurement community—the researchers who put antennas on
+rooftops and study how the network actually works. Additionally, we will review SpaceX’s FCC
+filings, conference presentations by their engineers, and academic literature on LEO networks,
+including a 2019 paper titled “ Network Topology Design at 27,000 km/ h.” Where certain information
+is derived from measurements and not confirmed by SpaceX, I will note this in the video. So, I
+summarized all publicly available information in these diagrams. This will be a very visual video,
+and I want you to watch it to the end, because the most interesting part starts somewhere in the
+middle. So, let's begin. Let's talk about why Starlink satellites fly so close to Earth. As you know
+, satellite internet existed long before Starlink and operated on geostationary satellites, also
+known as GEO. These are satellites orbiting at an altitude of 35,800 km above the Earth. At this
+altitude, one revolution of the satellite around the Earth takes 24 hours , which means that it
+constantly hangs over one point. From a network point of view, this is great because the satellite
+is stationary in the sky, one device covers a third of the planet, and your antenna is rigidly fixed
+at one point, and no switching between satellites is required during the entire operation . But
+there is a big problem—the distance. It takes about 120 milliseconds for light to travel 36,000 km,
+and your data packet goes up , comes back down, and the response does the same. That's about 500
+milliseconds per complete cycle before the packet even hits the internet. When you add processing
+and ground network delays, real-world GEO connections typically have around 600 milliseconds of
+latency. This is acceptable for downloading files, but terrible for video communication, effectively
+making them unsuitable for interactive things like video calls or gaming. Starlink's response was to
+lower the altitude to 550 km, which is 65 times closer to Earth . At this altitude, the one-way
+light travel time is less than 2 milliseconds, and the measured round-trip delays are between 20 and
+40 milliseconds, most of which are due to the ground network. Due to the laws of orbital mechanics,
+you cannot choose altitude and speed separately. At an altitude of 550 km, there is only one speed
+option for maintaining orbit—it is about 7.5 km per second. If you fly slower, the satellite will
+fall to Earth. So, while GEO satellites hang motionless in the sky due to their height, Starlink
+satellites, due to their low orbit, cross the entire sky in a matter of minutes and very quickly
+disappear over the horizon. Therefore, to ensure continuous user service, a chain of satellites is
+needed, where each subsequent one picks up the work of the previous one. And to serve the entire
+planet, thousands are needed. And it was precisely this engineering compromise that SpaceX chose.
+Instead of a single fixed geostationary satellite, they created a low-earth orbit, or LEO, network
+of 7,000 moving satellites, trading distance for movement and latency for complexity. And the first
+engineering problem that all of this creates is the antenna on your roof. A traditional satellite
+dish is a parabolic reflector on a motor. To track a Starlink satellite, the dish would have to
+travel across the entire sky in 4 minutes, turn sharply, catch the next satellite, and do so
+forever, in wind and cold, which would render it inoperable in a matter of months. So, it's not very
+practical. If you are a pure software developer with no background in telecommunications or
+electronics, the next part will be a bit difficult to understand, but I encourage you to listen
+anyway, because it may help you in a few years when AI takes over software development and we all
+have to work with "hardware ". In short, the Starlink terminal is not a dish at all. This is
+actually a phased array antenna. These are hundreds of small antenna elements on a flat panel, each
+transmitting the same signal with tiny individual time delays. If these time delays are set
+correctly, signals from hundreds of antenna elements are combined into a narrow beam, and changing
+the delay simply moves that beam. Try to imagine it this way. You electronically steer the beam
+without moving the antenna itself. No motors or mechanical parts are involved in the tracking
+process. This beam can be directed to any point in the sky in milliseconds, and all of this happens,
+as I said, without motors, although the Starlink terminal does have a motor that is only used to
+tilt the panel once during installation. Most importantly, the terminal or user dish never searches
+for a satellite. They are actually being told where to look. The dish stores what's called an
+ephemeris—a constantly updated record of where each satellite will be over time, along with its own
+GPS coordinates. Based on these two data, calculating the angle at which the antenna should be
+directed is just a mathematical problem. So, the position of the satellite in the sky is not
+searched for, it is actually predicted. This same idea solves another problem, which, as one might
+expect, is much more complex, namely the so-called Doppler effect. So, as a satellite approaches you
+at 7.5 km/s, it compresses the radio waves it transmits, and this shifts their frequency by hundreds
+of kHz in the Starlink operating bands. And as the satellite moves across the sky, this shift is
+constantly changing, and this is the Doppler effect. So a conventional receiver would have to
+measure and track this error in real time, but Starlink largely avoids this because since both the
+satellite and the terminal know each other's predicted positions from the ephemeris, they can pre-
+calculate the expected Doppler shift and compensate for it before transmission. And by the time the
+signal reaches the receiver, most of the frequency error has already been eliminated. And this same
+idea—prediction instead of detection—is not limited to the antenna. Starlink applies it to the
+entire network. As it turns out, locking onto one satellite is the easy part, but deciding which
+satellite should serve you for the next 15 seconds is much more difficult. So let's see how it goes
+in the next section. Before we talk about how this is solved, let's take a look at how Starlink sees
+the ground. For Starlink, the planet is divided into hexagonal cells, and if you look at Starlink's
+own availability map, the cells it shows come from H3—an open-source geospatial indexing library
+that Uber developed to divide the world into hexagons. So the same grid that can be used to group
+ride requests is used to group satellite beams. Each satellite can only form a limited number of
+narrow beams, and each beam covers approximately one hexagonal cell, and everyone within that cell
+shares a common bandwidth resource . This means that Starlink is not selling the internet so much as
+access to a beam over a certain area of ​​the Earth's surface. This is why some regions are marked
+as sold out or with a waiting list, and it is not an artificial shortage . This means that every
+beam that can serve this hexagon is already occupied, and adding another client would mean taking
+capacity away from someone else. And this leads to a real planning problem. At any given moment,
+thousands of satellites, each with a limited number of beams, move over millions of hexagonal cells
+that require constant coverage. Every few seconds, the network has to decide which satellite should
+cover which cell, and continue to make that decision while the entire array is moving overhead. So
+who makes these decisions? Every 15 seconds, the entire group goes through a replanning phase. The
+scheduler decides which satellite should cover which cells, calculates new assignments, and
+distributes them throughout the network. Your terminal receives a simple instruction: stay on the
+current satellite or switch to a new one. If switching is required, the beam moves in milliseconds.
+This part was never published by the Starlink team, but the researchers figured it out on their own.
+They installed special Starlink terminals, recorded the delay over a long period of time, and found
+the same pattern. This delay changes in precise steps that occur at exactly 15 -second intervals,
+synchronized for different users. In between these limits, the response time changes smoothly as
+your serving satellite approaches or moves away. But at the border it changes abruptly. So the
+entire network is actually replanned four times a minute, which is 5,760 times every day. The
+planner doesn't just choose the nearest satellite. Every 15 seconds, it solves a global optimization
+problem with dozens of constraints. The satellite must be at least 25° above your horizon. Below,
+the signal passes through a too thick layer of the atmosphere at too sharp an angle, and each
+satellite has a limited power reserve and a limited number of beams, so it can only serve a certain
+number of cells at a time, and not every satellite can transmit your traffic to the Internet, since
+the visibility of gateways and the licenses of specific countries determine which paths are legal in
+general. So there is another restriction - regulatory. International spectrum usage rules define a
+geostationary orbit exclusion zone to protect older geostationary satellites from interference.
+Therefore, if a Starlink satellite moves into line of sight between your terminal and the
+geostationary belt, it should stop transmitting to you before it reaches that zone. In fact, there
+is an invisible no-transmission line moving across the sky— not because of physics, but because of
+rules. The planner anticipates these intersections in advance and routes traffic around them, so
+even regulation becomes part of the optimization problem. If you saw my video about how DataDog lost
+40,000 servers in a minute, you know it was because all those servers changed at the same time, and
+that's how the outage started. But in the case of Starlink, the entire network is intentionally
+changing simultaneously four times a minute, and they still manage. The difference between them is
+that for DataDog the changes were a surprise, while in Starlink they are calculated in advance, that
+is, the future of the network is predicted and sent to all terminals as a schedule. Now let's
+discuss an important issue. How does Starlink calculate or predict the future of its network?
+Starlink can predict the future of the network because the future of the network is Newtonian. A
+satellite in orbit does not move anywhere unpredictably. Its path is determined by gravity,
+altitude, and a small correction for atmospheric drag. Knowing today's orbital elements, it is
+possible to calculate where this satellite will be next Tuesday at 3:47 p.m., to within a few
+meters. Every time of appearance over every hexagonal cell , every moment when any two satellites
+will be in line of sight of each other, and every connection that will be geometrically possible
+next week — all of this can be calculated right now. Compare this to the networks we use on Earth.
+When a fiber optic cable is cut, a router fails, or someone uploads a misconfiguration, routing
+protocols like OSPF start telling every other router which links are still active, while BGP
+gradually enumerates new paths across the internet. And none of this can happen in advance because
+ground faults are fundamentally unpredictable, and you can't plan for a construction crew to
+accidentally cut a fiber optic cable. So, the whole job of our existing routing protocols, such as
+OSPF and BGP, is to detect unexpected changes and respond to them as quickly as possible. And they,
+in essence, do not predict, but react. And I hope this difference is quite clear. Currently, the
+Starlink network topology is constantly changing, but unlike terrestrial networks, these changes are
+almost entirely predictable. So Starlink turned this problem on its head. Instead of detecting the
+network after it changes, it computes the network before it changes. The ground control center takes
+the predicted orbits of each satellite, along with the location of each gateway and user cell, as
+well as a full set of operational constraints , and then calculates the assignment for the next
+planning interval. This plan is distributed to the satellite group before it becomes operational.
+The data plane is in orbit and is the part of the network that directly forwards packets, while the
+control plane remains on the ground. This is the part that decides where these packets should go.
+And because the scheduler already knows where each satellite will be for the next 15 seconds, it can
+calculate the next state of the network before the topology changes. Traditional networks wait for a
+topology change and then converge on a new vision of the world, while Starlink distributes the next
+plan before anyone needs it. Therefore, convergence is replaced by the graph . The 15-second epoch
+makes this execution fail-safe, and all involved components such as satellites, antennas, and
+gateways migrate to the new configuration at the same time, meaning no router migrates halfway
+through and no two nodes argue about which version of the map is current. If you have developed
+distributed systems, you know how this works. This is epoch-based reconfiguration, so it's the same
+idea applied to the physical network. So what about those changes that are truly unexpected? For
+example, a satellite fails or a laser terminal breaks. Well, they are processed in the usual, boring
+way. They are not predicted, they actually manifest . When the ground control center learns that the
+satellite is unavailable, it simply removes it from the next optimization, and after 15 seconds the
+scheduler calculates a new global task that no longer depends on the faulty device. So, essentially,
+a new plan is being calculated . So far we've only talked about the connection between your terminal
+and the satellite, but that's only half the story. When your data packet reaches orbit, it still has
+to pass through a constellation of satellites, and the original Starlink didn't have that
+capability. The first generation architecture was called “bent pipe,” and that’s apt because your
+packet is first sent to a satellite, which then routes it directly to a gateway—a ground station
+with large antennas and a fiber-optic connection to the terrestrial network. So , the satellite does
+not forward packets through the space network, it simply returns them back to Earth. It's like a
+mirror in the sky, and in the beginning it worked, but it actually created a significant limitation.
+For your connection to work, you and the gateway must be in line of sight of the same satellite at
+the same time, and at an altitude of about 550 km, a Starlink satellite covers an area of ​​only a
+few thousand kilometers. So, if there is no gateway within this zone, your package has nowhere to go
+after reaching orbit; This explains the early coverage map, as Starlink initially only appeared in
+the continental United States and Europe —places where gateways can be placed every few hundred
+kilometers on existing fiber optic lines. But it couldn't provide reliable coverage in the middle of
+the Pacific Ocean, the polar regions, or for planes and ships far from land, because there was no
+gateway beneath the satellite to receive traffic. The " bent pipe" architecture made the satellite
+network just a thin wireless extension of the terrestrial network. Your package spent 2 ms in space
+and the rest of the time on the ground. Now, to cover the places where there was no fiber below, the
+packets had to stop returning to Earth. They were to start moving sideways, from satellite to
+satellite, directly through outer space. And everything changed in 2021, when SpaceX began launching
+satellites with optical inter-satellite communication lines. Instead of immediately sending each
+packet to Earth, satellites could now forward traffic directly to each other. According to SpaceX's
+Photonics 2024 presentation, the array now contains over 9,000 laser communication lines, each
+capable of transmitting about 100 gigabits per second. Some of them reach 5,400 km, together
+transporting about 40 petabytes of data every day. The engineering challenge here is obvious. The
+laser communication terminal must maintain milliradian-level pointing accuracy over thousands of
+kilometers while both satellites travel at orbital speed, experiencing constant altitude
+perturbations. Here is the important detail that makes this possible. Starlink satellites are not
+scattered around the Earth in a chaotic manner. They are organized into dozens of orbital planes,
+and each such plane can be thought of as a long ring of satellites moving in exactly the same path
+around the planet, one after the other. Many such rings orbit the Earth side by side, slightly
+offset from each other. Each satellite's most important communications are directed to the
+spacecraft immediately ahead and behind it in the same orbital plane, and they are relatively easy
+to establish because these neighbors are at the same altitude, moving at the same speed along the
+same trajectory. Their relative velocity is almost zero. So if you imagine the Starlink
+constellation as dozens of parallel highways circling the Earth, each highway is an orbital plane, a
+ring of satellites following the same path one after the other, and many such planes next to each
+other form the structure of the constellation. Now imagine two cars traveling at 120 km/h on the
+same road, keeping a line; It's easy to pass something between them because from each seat it seems
+like the other car is standing still . The speed of 27,000 km/h is leveled off, and in practice
+these intraplane connections, once established, remain active for weeks; they form the foundation of
+the network, they are durable, stable, and virtually static. More complex are the connections
+between neighboring orbital planes, or, to recall the analogy, other highways. These satellites do
+not move in one path. They are located in neighboring rings around the Earth, and as the
+constellation moves, the geometry between them is constantly changing: a satellite in a neighboring
+plane slowly drifts into the desired position, and then moves away. Eventually, the laser link has
+to be broken and reestablished with the next satellite that comes online . But even these shifts are
+not a surprise. Orbital mechanics tell Starlink exactly when the communication between the planes
+will cease to be effective and which satellite will replace it. The transfer is calculated long
+before it even happens. There is one place where these laser links get significantly more
+complicated. Eventually, the satellites flying north must pass those flying south, and at that point
+their relative velocities do not cancel out. They actually add up, creating a convergence speed of
+tens of thousands of kilometers per hour. These are the most difficult connections to establish and
+maintain in the entire constellation. So, Starlink mostly avoids connecting satellites between two
+opposing orbital planes, preferring routes within slower geometries whenever possible. As a result,
+the network turns out to be much more structured than it seems at first glance, and some connections
+are actually permanent. Others change on a predictable schedule, and the most difficult parts of the
+constellation are simply avoided. Now, light in a fiber optic cable does not travel at the speed of
+light. It travels at the speed of light in glass, and the glass slows it down by about a third. So
+that's about 200,000 km/s in the fiber compared to 300,000 km/s in a vacuum. Photons above your head
+travel 50% faster than photons under the ocean. And at short distances, fiber still wins, because
+each Starlink data packet has to ascend to 550 km into orbit, travel through the constellation, and
+then descend another 550 km back to Earth. This is an additional distance that the terrestrial fiber
+path does not have to cover. But here's the most important part. These overhead costs are almost
+fixed. The path through space becomes only slightly longer as the destination becomes farther away.
+Whereas the path through the fiber gets longer kilometer by kilometer, and each of those kilometers
+is only traveled at 2/3 the speed of light, so eventually the slower medium loses. So, if you do the
+calculations, it turns out that once the distance exceeds about 3,000 km, the path through space
+becomes faster than the path through fiber. Simulations by Mark Handley at University College London
+demonstrated just that. Simulations have examined routes such as London- Singapore and New York-
+Tokyo and found that the space route would save tens of milliseconds. So why do a few tens of
+milliseconds matter? Because for some industries, latency is the product, and high-frequency trading
+firms have spent billions laying out more direct fiber routes and building microwave networks just
+to gain a few thousandths of a second. So, if you can transmit information faster over long
+distances, someone is sure to pay for it. Now let's take a short break, and then we'll talk about
+something important: how your internet connection survives on a network where the satellite above
+your head changes every few minutes. Now, before I get into the topic, I want to take a few seconds
+to tell you something important. If you are in a leadership position in an engineering team, such as
+VP of Engineering, CIO, Lead Engineer, SRE, Platform Engineer, or Architect, there is virtually no
+room for you to learn, as all learning platforms are designed for beginners and focus primarily on
+interview preparation. System design in interviews is just a short 45- minute problem analysis, but
+it is impossible to build an industrial- grade system based on this knowledge alone. So, if you've
+been looking for a place for experienced engineers and don't know how to use the company's annual
+training budget, you'll definitely like the AlgoRock platform. The link to it is in the description
+of this video. This is the platform we are developing: it contains in-depth lessons in system
+design, software architecture training courses , AI-powered architecture verification, Excalidraw
+diagrams, and reference materials for advanced engineers . You can join the platform for just $15
+per month, but if you need more practice, I also run a 12- week intensive course on systems design
+and architecture several times a year. Together, we analyze real industrial systems, architectural
+reviews, and large-scale cases. There is usually a long queue for the live course streams as I can
+only take 15 engineers per group. So, if you want immediate access to recordings of previous
+streams, you can sign up for a self- study program for $800, which is very easily offset by your
+company's training budget. You will find everything: free resources, platform access, and
+information about streams on the algorock.io website. The link is in the description. Now let's get
+back to the video. You already know that Starlink is constantly reshaping the way data is
+transmitted in space. So, if your traffic is constantly switching between satellites every few
+minutes and the network is re-planning its path every 15 seconds, why isn't your SSH session being
+dropped 200 times an hour? This is because your IP address doesn't " live" in space. It is located
+at a point of presence (POP) on the ground. It could be Seattle, Frankfurt or London. Essentially,
+this is the facility where Starlink connects to the rest of the internet. And this POP is your
+anchor. Everything that happens between your terminal and this POP is the Starlink private transport
+network , and your packet may pass through satellites, laser channels, gateways, and fiber optics,
+but to the internet it is just one tunnel, the endpoints of which do not change. The path inside
+this tunnel is constantly being rebuilt, but the identifiers at the ends remain the same. So from
+the internet's perspective, there is no movement . Websites determine your geolocation by the city
+where the POP is located. Therefore, people in rural Montana are shown as users from Seattle. But
+from the perspective of the Internet, there is no movement . BGP does not see how satellites move
+around the Earth. He simply sees Starlink announcing the same IP prefixes from the same points of
+presence. Your TCP connection sees one stable endpoint . Under this, hundreds of switches between
+satellites can occur, and the Internet will never know about it. If this sounds familiar to you, it
+should . This is roughly how your phone works. Cellular networks pin your session to a packet
+gateway deep in the carrier's core and tunnel everything between your phone and that gateway, so
+your file download isn't interrupted even if you drive past 20 towers. Starlink took the same model
+and stretched this tunnel through space. If you continuously measure the round- trip time of a
+signal through a Starlink connection and collect latency data , one pattern immediately becomes
+noticeable . Round- trip time is typically 20 to 60 milliseconds, and every 15 seconds the scheduler
+may switch you to a different satellite, causing latency to spike or drop, sometimes with a few
+packets lost during the switch. And instead of random jumps, the graph looks like a repeating "saw".
+The communication channel is not " noisy", it simply changes according to the schedule. And this is
+important because most Internet protocols assume that changes are random. CUBIC, a congestion
+control algorithm used in most modern networks, interprets packet loss as congestion, even if that
+loss is due to a planned satellite switchover. BBR, Google's congestion management algorithm,
+constantly estimates the minimum delay along the way, but in the case of Starlink, this minimum
+itself changes every 15 seconds. And even real- time applications must account for these periodic
+latency spikes. In practice, this is not a problem for most users. Video calls, gaming, and web
+browsing work very well. But if you're building systems that rely on Starlink, like for ships,
+aircraft, remote mines, or offshore platforms, you have to accept this channel for what it is. It is
+not unreliable, it just changes periodically. So your buffers, timeouts, and congestion control
+should take into account that network behavior is synchronized, not random. The software on the
+Starlink satellite is updated in the usual way. It can send new firmware “over the air” to both
+satellites and user terminals, updating the entire group quite frequently. But the hardware is not
+updated. It is being replaced. The satellites are designed for approximately 5 years of operation,
+and the low orbit is self-cleaning. Atmospheric resistance at an altitude of 550 km ensures that
+anything that fails will fall down and burn up on its own. Therefore, new capabilities appear with
+new satellites during the next launch. Lasers only appeared in version 1.5, and higher capacity and
+new ranges in version 2 mini, which means that the constellation remains constantly heterogeneous,
+and at any given time there are several generations of satellites flying with different
+capabilities: some with lasers, some without, with different ranges and number of beams. The planner
+knows what each individual satellite is capable of and builds the work around that. And the Starlink
+satellite fleet actively avoids space traffic during operation. In a recent 6-month reporting
+period, Starlink satellites performed approximately 50,000 autonomous collision avoidance maneuvers,
+which were essentially small pulses to avoid debris and other spacecraft, performed without human
+intervention. But each of these maneuvers changes the orbit, and a changed orbit means that the
+predicted position has to be updated, and that prediction determines almost everything we've talked
+about: antenna pointing, Doppler correction, laser acquisition, and 15-second planning cycles. So,
+the satellites report where they have moved, and the ground stations recalculate the network taking
+into account the new positions. Now let's put everything together and trace a single data packet
+across the entire Starlink network so we can visualize the entire system. Imagine you're on a ship
+in the middle of the Atlantic and you're loading a web page. Your terminal is already pointed
+exactly where the current 15-second graph points, that is, at the satellite it was not looking for,
+whose position it calculated based on orbital data at a frequency that was already Doppler-
+compensated before the transmission began. The packet leaves your antenna and reaches orbit in about
+2 milliseconds. There is no airlock underneath, so instead of returning straight to Earth, the
+package begins to move sideways through the constellation. It overcomes stable laser links between
+satellites in one orbital plane, and then makes scheduled transitions to neighboring planes as the
+route gradually returns to Europe. None of these routing decisions are made on the fly. Each hop was
+calculated before the packet was transmitted. Eventually, the packet reaches a gateway on the Irish
+coast, enters the terrestrial fiber network, and heads to your point of presence in London. There
+your public IP address is located, the packet goes through NAT, hits the open internet, reaches the
+website, and the response starts its return journey. Now , in the middle of loading the page, the
+15-second scheduler fires and your terminal switches to another satellite, the entire path through
+space is reconfigured, and a new tunnel is established to the same point of presence in London. Your
+TLS session doesn't notice anything because from the internet's perspective, nothing has actually
+changed. And this, in fact, is the story of Starlink. Almost everything that looked dynamic, such as
+guidance, link handover, routing, and even laser channels, was performed on a schedule calculated in
+advance. And the only part of the journey that was completely reactive was the internet on the
+ground. So, here's what we can learn from Starlink's incredible architecture. Separate expected
+changes from unexpected ones . Most systems react to everything in a row, but not every change is a
+surprise. Traffic patterns, scheduled maintenance, certificate expirations, and scheduled failovers
+can be calculated in advance, so leave reactive systems for disruptions you typically can't predict.
+When changes are permanent, synchronize them. A fixed scheduling epoch turns thousands of
+independent transitions into a single coordinated update. This is the same idea as epoch-based
+reconfiguration in distributed systems, only applied to a network moving in space. Third: maintain
+your identity regardless of changes. Your IP address never changes, even if the satellite serving
+you changes. And this same principle is found everywhere. Kubernetes services on top of ephemeral
+pods, cellular packet gateways, load balancers on top of volatile backends. So the idea is to keep
+the identity stable while allowing the infrastructure underneath it to change as much as it wants.
+Fourth: Choose centralized scheduling or distributed routing based on predictability. If the future
+can be calculated, the central planner usually wins. If it is impossible to predict, distributed
+protocols become necessary. The trick is to know which parts of your system fall into each category.
+The next thing that struck me about Starlink is that they started with physics, not topology. Light
+travels about 50% faster in a vacuum than in glass. Therefore, sometimes a longer path through a
+faster medium is better than a shorter one. So the limitations of the physical world are just as
+important as the software that runs on top of it. The next thing we can learn is: design for
+replacement, not perfection. Starlink constantly updates its software, but hardware is replaced over
+time. This means that the grouping is constantly heterogeneous, and the planner must understand the
+capabilities of each satellite, instead of considering them identical. I spend a lot of time
+researching these topics and creating such in-depth videos, and it takes a lot of energy after my
+main job. So please don't forget to subscribe, like, and share. If you have any questions, post them
+in the comments and I usually respond very quickly. Well, thanks for watching, and I'll see you in
+the next video.

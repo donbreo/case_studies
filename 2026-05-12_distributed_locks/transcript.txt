@@ -1,0 +1,150 @@
+It took the engineers at Plaid 4 hours to figure out why thousands of bank transactions were
+appearing twice in their users' account. Plaid is the company that connects your bank to apps like
+Venmo, Robinhood, Coinbase. So, when their system started duplicating transactions, real people
+opened up their banking app and saw changes that shouldn't exist. And some of them filed for
+disputes. Some of them posted about it online. There was 4 hours of customer support tickets and 4
+hours of engineers staring at code that as far as they could tell was working perfectly. The
+culprit, when they finally found it, was a single concept every backend engineers thinks that they
+understand. It's called a lock. And today, in this video, we'll be talking about distributed locks.
+We'll talk about why they're trickier than they look and why most implementations are quietly broken
+in ways that nobody notices until production. And we'll also take a look at what actually makes a
+distributed lock safe. So, let's start with what a lock is supposed to do. When two servers might
+try to touch the same piece of data in the exact same moment, for example, charging the same card or
+updating the same balance or creating the same transaction, a lock makes sure that only one of them
+gets through. The first server grabs the lock, does its work, and then releases it. And until then,
+everyone else waits their turn. So, on a single machine, this is easy. Your programming language
+gives you a mutex. The operating system manages it. There's one piece of memory, one clock, and if
+the process crashes, the OS cleans it up automatically. It just works. But, in a distributed system,
+it gets way harder. The servers don't share memory. They don't share a clock. They can't even
+reliably tell if another server has crashed or is just slow. So, teams reach for Redis, a fast
+shared data store, and they write something that looks like this. Set key NX EX 10. The translation
+for this is create this key only if it doesn't exist and delete it automatically after 10 seconds.
+If you got the key, you have the lock. If you didn't, someone else has it and you wait. This is
+simple and fast and it works most of the time, but it gets quietly broken in a way most engineers
+never see. So, you've now set context for what's to come in this video moving forward. But, I just
+want to tell you that this video is actually part of the intermediate system design series. It's a
+playlist on this channel and just like this playlist, there's also a beginner system design playlist
+and that has more than 50 videos. If you binge watch both of these playlists, you'll know system
+design better than 99% of the people on the planet. But, here's the problem that nobody tells you
+about. A lock only works if the process holding it is actually running. And the problem is that
+processes don't really control when they run. A garbage collection pause can freeze a process for 10
+seconds without any warning. A network delay can stall a response or a Kubernetes spot can get
+killed and restarted in the middle of an operation. The cloud provider can just migrate your VMs to
+a different host. Any of these can cause your processes to just stop for a few seconds and then
+resume like nothing happened. But, meanwhile, the lock's timer keeps ticking. So, imagine this.
+Process A grabs a lock with a 10-second timeout and process A starts charging a customer's credit
+card. Then, process A hits a garbage collection pause for 12 seconds. Redis is just looking at its
+clock. 10 seconds have passed. The lock expired. Redis has no way of knowing the holder is just
+paused. It seems like an expired key, so it lets the next process in. Now, process B asks for the
+lock and process B gets it and process B starts charging the same customer's card. Then, process A
+wakes up and from its perspective, no time has passed. It still thinks it has the lock, so it goes
+ahead and charges the card, too. So, now you have two processes, A and B, both convinced that they
+have exclusive access, both writing to the same record, both charging the same card, and this is
+exactly what happened at Plaid. Their locks were working, but their locks were not enough. So, this
+is the heart of one of the most important arguments in distributed systems engineering, the
+Kleppmann and Antirez Redlock debate. Antirez, who created Redis, proposed an algorithm called
+Redlock, which is basically instead of using one Redis instance for the lock, use five of them and
+require a majority to agree. The idea was that distributing the lock across multiple Redis nodes
+would make it more reliable. Martin Kleppmann, a distributed systems researcher, wrote a famous
+critique. His point was simple. Pause problem isn't a Redis problem, it's a client problem. Your
+process can pause whether you're talking to one Redis or five. Adding more Redis instances doesn't
+help if your client itself goes silent for 12 seconds. So, if more Redis instances aren't the
+answer, what is? Kleppmann's answer is called fencing tokens. And once you see it, it changes how
+you think about locks forever. So, here's how it works. Every time a lock is acquired, the lock
+server hands out a number, which is a fencing token. Process A gets token 33. Later, when process B
+acquires the lock, it gets token 34. The numbers only ever go up. Now, here's the awesome part. When
+process A goes to write to the database, it includes its token number 33 in the write. The database
+checks, is this token greater than or equal to the highest token I've seen so far? If yes, it
+accepts the write. If no, it rejects it. So, let's replay our scenario. Process A grabs the lock,
+gets token 33, starts working, and process A, just like the last time, pauses for 12 seconds. And
+until then, the lock expires. Process B grabs the lock, gets token 34, and makes its write. The
+database sees token 34, accepts it, and remembers 34 as the highest. Then, process A wakes up, tries
+to write with token number 33. The database sees that 33 is actually lesser than 34 and rejects the
+write. And this is how we just prevented damage. So, the lock can fail and two processes can both
+think they hold it and the system is still correct because the stale holder's write gets rejected
+before it lands. This is the reframe most engineers miss. The lock is not the correctness boundary,
+the database is. The lock is just a performance optimization on top. And the lock is there to make
+sure that 99% of the time only one process is in the critical section and you're not wasting work.
+The fencing token, which was 33 and 34, is what guarantees correctness when the lock fails. And the
+lock will eventually fail. Now, before we continue, I'm going to take a few seconds to go a bit off
+topic and tell you about the AlgoRock cohort, which is a live cohort that I personally teach and
+there are about 10 to 15 senior engineers in one cohort. I do this because there are no cohorts that
+exist for senior engineers, basically people that already know the basics of architecture and system
+design and are wanting to build the next generation of production software in the post-AI world. So,
+this is a 12-weeks program and we cover topics like advanced system design, AI-native system design,
+architecture for the post-AI world, and tips and tricks for using AI coding tools, but from a senior
+engineer perspective. I'm planning my next cohort, which is actually my third cohort, around mid or
+end of May 2026. So, I want you to go through the algorock.io website, which is algorock.io website,
+and I want you to check out the topics that we're going to be covering in the cohort. If you like
+it, you can fill up the form that opens up when you hit the enroll button. Once you've done that,
+I'll check to see if you're a great fit and we'll set up a call. It's about $2,500 for the entire
+live cohort and I teach the cohort personally. It's a great experience. Once you fill the form, you
+can also talk to any of the people who have attended the cohort previously and decide if you want to
+go ahead or not. But, if you just wanted access to pre-recorded cohort videos, that'll be about
+$800. All right. Now, back to the video. All right. So, fencing tokens are the safety mechanism, but
+let's also talk about the liveness mechanism, which helps us in making sure a deadlock holder does
+not block everyone forever. The pattern for that is called a lease. A lease is basically a lock with
+a heartbeat. The holder periodically renews it, say every 5 seconds for a 15-second lease. If the
+renewal fails because the process paused or the network went down, the lease expires and someone
+else can acquire it. Now, the rule of thumb here is set your lease TTL to about three to five times
+the expected work duration and renew at TTL divided by three. That gives you two missed renewals
+before the lease expires, which absorbs brief network blips without falsely declaring the holder as
+dead. Leases don't solve the pause problem on their own. If your process pauses, your renewal thread
+pauses, too. When you wake up, the lease may have already expired and someone else may have it. So,
+leases give you liveness, but you still need fencing tokens, as we saw earlier, for safety. Lease
+for liveness and fence for safety. That's the combination that actually works. Now, if you actually
+need a lock that's safe by itself without having to add fencing tokens to every storage system, you
+need consensus and the standard tools for that are Zookeeper and etcd. Zookeeper has a clever
+pattern for locks using something called ephemeral sequential nodes. When a process wants the lock,
+it creates a node and gets a sequence number. The lowest number wins and each waiter watches only
+the node right before it in line. So, when someone releases, only one waiter gets notified, so
+there's no thundering herd. And the nice part is that the nodes are ephemeral, which means they're
+tied to the client's session. If the holder crashes or loses its connection, Zookeeper detects it,
+deletes the node, and the next waiter automatically takes over. So, no timeouts and no fencing
+tokens needed. The trade-off is latency. Zookeeper operations are 5 to 15 milliseconds compared to
+about half a millisecond for Redis. For locks that you acquire occasionally, leader election,
+configuration changes, that's totally fine. But, for thousands of locks per second, it becomes a
+bottleneck. But, there's actually a much simpler option that many people overlook entirely. And that
+is Postgres advisory locks. If your system already uses Postgres, and most systems do, you have a
+perfectly good distributed lock built right in. The function is called PG advisory lock and it uses
+the same internal lock manager as select for update. So, there's no additional infrastructure, it's
+crash safe, and it has deadlock detection built right in. And it'll take about 1 millisecond per
+operation. There's also a transaction scope variant called PG advisory exact lock, which ties the
+lock to your transaction. So, if your transaction rolls back or commits, the lock is released
+automatically. So, there's no risk of forgetting to release it. Now, the catch is you need a
+database connection per lock holder, and if Postgres goes down, all your locks go with it. But, for
+most applications where the critical section involves writing to the same database anyway, advisory
+locks are honestly the right starting point, and they're highly underrated. So, let's talk about
+granularity, which is about locking the right thing. And you don't want to be too high-level or too
+granular. So, granularity can be too coarse, or it could be too fine, but we want to go to the just
+right sweet spot. So, locking at the entity level is great, but locking at the table level may not
+be great. And another example would be locking the specific order and not locking the entire orders
+table, because table-level locking serializes everything and kills your throughput. You also don't
+want to go too micro or too fine in your granular controls, because if you start locking individual
+fields, like a separate lock for the order status and another lock for its payments, you create
+deadlock risk. So, there will be two processes trying to grab both locks in different orders, and
+now they're waiting on each other forever. If you really do need to hold multiple locks, the rule is
+simple, always acquire them in the same order. So, alphabetical works well. If everyone agrees that
+A comes before B, no two processes will ever be waiting on each other in opposite directions, so
+there will be no deadlocks. Okay, one last thing, before you reach for any lock at all, ask
+yourself, do I actually need one? Most of the time the answer is no. If your operation is item
+potent, meaning running it twice has the same effect as running it once, you don't need a lock. You
+can just use insert on conflict do nothing, the database handles the duplication for you. If you can
+detect a conflict after the fact, use optimistic concurrency. Add a version column, so when you
+write, do where version is equal to N. So, if two processes both try to update, only one of them
+succeeds, and the other has to retry. So, there's no lock, no deadlock, and no timeout management.
+The only case where you genuinely need a lock is when you have a non-item potent external side
+effect, like charging a card, sending an SMS, or calling a third-party API that costs money. And
+these are things that you can't undo and can't deduplicate downstream. And in that case, you need a
+lock plus fencing tokens, because the lock will fail. It's not a question of if, it's a question of
+when. All right, let me leave you with one mental model to walk away with. A distributed lock is not
+a mutex, because it can't be. The network just doesn't give you the guarantee a mutex needs. So,
+instead of thinking of a lock as one thing, think of it as two separate concerns. The first is
+liveness, where we're making sure dead holders don't lock forever. And the second is safety, where
+we're making sure stale holders can't corrupt data. So, leases that we learned about handle
+liveness, and fencing tokens handle safety. Confusing the two is how most distributed lock
+implementations end up broken. So, that was distributed locks. We learned about the process pause
+problem, the fencing of tokens, leases, Zookeeper, advisory locks, granularity, and when not to use
+a lock at all. I'm sure you appreciate how much time and work goes into building these diagrams and
+making these videos. So, please subscribe, like, and share this video, and drop a comment if you
+have any questions, and I'll see you in the next video.

@@ -1,0 +1,329 @@
+Airtable looks like a spreadsheet. You create tables, add columns, link records, and share them with
+your team, and everyone edits them in real time. But in fact, this is one of the most unusual
+databases that exist today. And the way it's constructed breaks most of the rules you might expect.
+Let's start with the strangest. Airtable does not execute your database queries on disk like a
+regular web application does. Each “base” —as Airtable calls each of its documents—gets a separate
+dedicated server that loads the entire database into memory and serves everything from RAM. And this
+actually turns their entire model upside down. Their servers are now limited by CPU power , not I/O.
+A regular backend spends its time waiting for the database. But Airtable data is already in RAM. So
+the resource they're running out of is computing power . And it led them to a very unexpected place.
+They were so pushed to the limits of JavaScript performance that they spent 3 years rewriting their
+own database engine in Rust, and it's already serving real client traffic. So rewriting a database
+engine in Rust sounds very interesting, right? We'll talk about that in this video, as well as other
+interesting engineering solutions from Airtable. So be sure to watch this video to the end.
+Additionally, each grid you look at is a persistent query that the database keeps up to date,
+sending you minimal changes every time a collaborator edits a cell. And all of this exists to solve
+one deceptively complex problem: a spreadsheet allows you to create your own structure on the fly.
+These can be tables, columns, any type of data, or anything related to each other. This entire
+structure is created during operation. Additionally, the user expects the spreadsheet to work
+instantly, sync across all of them as they edit, and recalculate formulas every time something
+changes. Doing this at the scale of 500,000 organizations, including most Fortune 100 companies, is
+a serious systemic challenge. Almost everything we talk about in this video is taken from Airtable's
+own engineering blog, especially the article " Rewriting our database in Rust." And I just took all
+this publicly available information and turned it into charts. So this is going to be a very visual
+video, and I want you to watch it all the way through to really understand how Airtable makes all of
+this happen. Everything in Airtable is organized around one idea called the “ base.” A base is a
+single Airtable document. So your tables, fields, related records, your views—all in one confined
+space. And I already mentioned that you determine its shape at runtime. And this is actually the
+really complicated part, because you add a table, add a field, choose its type ( like text or
+number), and link it to another table; there is a formula, and the table should store and process
+all this arbitrary structure that you just created on the fly as if it was always there. And this is
+a completely different problem than in a typical application, where engineers design a fixed circuit
+in advance. And if you've used Airtable, you know that an Airtable diagram is something that a user
+has just entered, and it's supposed to remain instantaneous while multiple people are editing it at
+the same time, with formulas and related records recalculating in real time. So, the base as a
+limited autonomous world is what makes this approach possible. So keep that in mind, because the
+entire architecture of Airtable is built around a concept called “base.” And let's start with where
+the base actually lives. This is the core of the entire system, and when we open a database,
+Airtable launches a dedicated server for it, which they call a worker. And this worker reads the
+entire database into memory, and this is done proactively, and then the worker serves everything
+directly from there . And so that we are clear : this is not a cache in front of the database; The
+database itself is stored in RAM and is what the system works with internally. They call this in-
+memory database MemApp, and it is completely single-user. So, your database gets its own worker,
+isolated from all the others. A small management service called a " supervisor" decides which worker
+serves which database, routes each request to the right one, and also manages the lifecycle of these
+workers. The reason for such isolation is the problem of " noisy neighbors", when one client, say a
+large enterprise, runs a huge load and, in turn, deprives the resources of everyone else who uses
+the same machine. By giving each database its own dedicated worker with its own memory, we ensure
+that one client's loaded database will not slow down everyone else's databases. So the mental model
+here is not a big shared database. These are effectively thousands of small databases in memory, one
+for each base, each with its own worker. And this is exactly the design decision that makes Airtable
+feel instant. But it also has certain limitations. And the limitation we're talking about is usually
+the first question an experienced engineer asks: if the database is loaded entirely into the memory
+of a single worker, then the entire database should fit on a single machine, right ? You can't just
+spread one database across 10 servers because all the in-memory optimization techniques , live
+queries, and dependency graphs that we'll talk about soon require the entire database to be in one
+place to work. So if we split the database between multiple machines, all the methods we'll discuss
+later will simply stop working, because these are optimization methods. So, the size of one database
+is limited by the capabilities of one machine, namely the RAM and the number of cores—this is the
+real ceiling, and that is why AirTable has limits on the number of records. AirTable's performance
+starts to drop after about 100,000 records, and even on the top plans the limit is just over
+100,000, but this number is not random or arbitrary. This is effectively how much data a single
+machine can hold in memory while remaining fast. I recently released a video on Slack where we
+discussed a concept called "hot sharding." If you haven't seen it yet, be sure to check it out. It
+was about a tenant who was too big to be divided between several cars. So he was limited to the
+capabilities of just one machine. And this is a version of the same problem in AirTable, only here
+it is not a coincidence. This is the price that the entire system architecture is forced to pay in
+exchange for the speed of operation in RAM. Since everything works in memory, there are some nuances
+here. The resource that ends first in a workflow is not what you expect, and we'll look at that in a
+minute. As we know, almost every backend web part we build is usually IO bound and spends most of
+its time waiting: database queries, cache or network waits, and the CPU is often idle. But with
+AirTable, it's the opposite, because the entire database is already in memory ; There is nothing to
+wait for. There are no queries to retrieve rows here. So when a workflow filters 100,000 records ,
+recalculates a column of formulas, or sums values in related tables . It performs all of this as
+pure computation directly in RAM. Therefore, the bottleneck is not the waiting. This is a
+calculation, and the workflows are now CPU bound. And this changes the approach to scaling. When you
+are I/ O constrained, you scale by adding more standby capacity, more connections, and machines that
+are mostly idle. But when you are limited by CPU power , you need real computing power and the use
+of every available core. And it was the fact that Airtable is limited by processor power, while most
+applications are limited by I/O operations, that ultimately forced the most important decision
+regarding system architecture in this case . But before we get to that, let's talk about the feature
+that makes working with RAM really worthwhile. So when a colleague edits a cell, you see the changes
+instantly. This could be your spreadsheet, filtered view, Kanban board, etc. But let's think about
+what all this really requires. You and everyone else are looking at different views of the data. So
+someone can view the filtered list. Someone can view a sorted list or grouped pieces of the same
+data. Each of these views is, in essence, a live query to an open database. The obvious way to keep
+all this information up to date is to re-run each query with every change. But at the scale of
+Airtable, where so many people are monitoring so many views, this is a very bad idea, as you would
+have to constantly restart queries . Therefore, the database does something that databases usually
+don't do. It implements what is called incremental view updating. I know it sounds complicated, but
+the goal is simple. When a record arrives, the system must determine how this change affects each
+live query without starting it from scratch. And if you don't understand this, it's okay . Let's
+look at a specific scenario. Let's say someone adds a new record, and the database calculates that
+this record falls into your filtered view but not into mine, and that it occupies a certain position
+after sorting. The system then creates a small diff, which is simply a precise instruction to your
+client on exactly what to change on the screen in front of you. So, it doesn't process the entire
+view anew for you. It just sends you this diff or delta of changes. This way all of these open looks
+get their own tiny personalized updates. And that's what lies at the heart of engineering how
+everyone sees changes in real time. And each of those diffs you see has to be reflected somewhere,
+which brings us to the other half of the system—the one that runs in your browser. There is a second
+copy of the system in RAM, and it is on your side. The Airtable client, or browser tab, is not just
+a thin terminal that queries the server for rendering on every scroll. It actually keeps its own
+working copy of the database data in memory and applies these diffs sent by the server. So, when you
+scroll the grid, sort a column, or switch to a different view, most of the changes happen directly
+in the local copy, which is the main reason for the instant response even on a slow connection. If
+you think about it, there are actually two databases in RAM for each database. An authoritative copy
+located on the worker and a mirror copy in your browser, which the server synchronizes using a
+differential change stream . This also explains the 100,000 record limit we talked about: even if
+the server can hold more, your browser has its own limit on how much database data it can hold in
+memory while remaining responsive. Much of the time, both copies are constantly recalculating
+values, because a cell in Airtable is not just a cell, because Airtable doesn't just store data . It
+constantly derives new data from existing data. So if you link two tables, a change in one can
+immediately affect the other table. The lookup field retrieves values through relationships. A
+rollup field can aggregate data from different related records, and a formula field calculates new
+values ​​from existing ones. The result is that records do not exist in isolation; they depend on
+each other, often through multiple tables, and these dependencies form a graph. So when you change
+one value, Airtable may need to recalculate everything that depends on it. So, all formulas that
+reference it, all summary fields built on it , lookup fields that display it elsewhere, and any
+views that currently display those results must be listed. If you look at it from a different angle,
+it starts to resemble not a traditional database, but rather a spreadsheet calculation mechanism.
+But the difference is that it runs on a server for many users at the same time, acting as a single
+source of truth. To make all of this work, Airtable actually stores this dependency graph in RAM. So
+when a value changes, the system can directly traverse the graph and enumerate all dependent records
+without constantly accessing the database. And this is exactly the type of workload with " pointer
+lookup" that becomes very expensive with frequent database queries. And this is only effective when
+this entire dependency graph is in memory . This template is actually very simple. You save the
+change, then list everything it affected, and send the results of the updates to clients. Before we
+dive in, I want to take a few seconds to tell you about a cohort I host every few months called
+Algorok, and we look at advanced systems design and architecture for the post-AI era. Typically,
+this cohort includes senior engineers such as SREs, platform engineers, lead engineers, enterprise
+and solution architects, and VPs of engineering. So, these are people with experience ranging from 5
+to 26 years. And this is a great way to learn from real production cases. I want you to visit the
+algor.io website, that's algorq.io, and take a look at the topics that we'll be covering in this
+cohort . We will look at modern systems: how Anthropic handles LLM, how Hugging Face supports
+multiple sandboxes for AI models, and how Together AI hosts so many open-source models at scale.
+It's 12 weeks long and each session is quite intense. If you like the themes, I want you to fill out
+the form that opens when you click the booking or registration button at the top. After you fill out
+the form, I will check if you are a good fit and we will schedule a call for you. A live cohort ,
+which I teach personally, costs about $2,400. But there is a huge queue for it, as I can only
+accommodate a few people, and I only hold it when I have time after my main job. Therefore, the
+recommended way is to access pre- recorded sessions. It only costs $800 and is very easy to get as
+compensation from your company. Now , if you are early in your career and new to engineering, this
+cohort may not be relevant to you. So you don't have to fill out the form. OK. Now let's get back to
+the video. So, we discussed that by storing the dependency graph in memory , we can solve the update
+problem. But AirTable faced a different problem. The product behaves like a spreadsheet, but at the
+same time requires database guarantees: transactional, consistency, replication, and storage of
+billions of records. Ready-to-use databases are built for traditional applications, not for shared
+spreadsheets, where users can freely create columns, link tables, drag and drop rows, and create
+formulas that depend on each other throughout the database. So AirTable eventually built their own
+database engine . And when you own the database, you can optimize it for behavior that would be
+clunky or expensive in a conventional system. Let's take drag-and-drop ordering as an example. You
+take a line and insert it between two others. In a regular database, rows have no natural order, and
+maintaining it often means renumbering everything below the moved row. Airtable avoids this through
+fractional indexing. Each row has a position value, and if you move the row between the second and
+third, it simply becomes 2.5. And if you insert another line between them, it becomes 2.75. So only
+the row you moved changes. The same approach is noticeable in other aspects. Adding a column is
+technically a schema change. In many databases, changing the schema is a complex operation that can
+lock tables and interrupt work. Airtable made schema changes transactional and deferred. So the
+field appears instantly, while everyone else continues to work. They also built locale- dependent
+sorting directly into the kernel. The column with values ​​1, 2, and 10 is sorted as a human would
+expect, not purely alphabetically. None of these three features we just discussed sound particularly
+impressive. But these are examples of a much broader pattern. By creating your own database, you can
+make common spreadsheet operations instantaneous, even when there are millions of records
+underneath. And that leads to an even bigger problem that they eventually had to solve. Not every
+change in Airtable affects just one record. Some changes affect an entire column at once. Let's take
+a formula field that uses the current time. Now, every value in this column depends on a clock that
+is constantly running. Or imagine changing a column type from plain text to another. Suddenly, every
+value in that column may need to be recalculated or converted. In a traditional database, these are
+large-scale operations. You are no longer updating a single row. You are potentially affecting every
+row in the table. Airtable constantly faces such situations because users are free to modify their
+data. Columns are added, field types change, formulas evolve, and relationships are reconfigured. To
+make these operations practical , Airtable has built specialized batch processing primitives into
+the core. Instead of updating records one by one, the system can efficiently rewrite large parts of
+the table as a single operation. This sounds like a minor implementation detail, but it changes the
+feel of working with the product. The user drags a column, changes a field type, or edits a formula
+and expects an instant result . And "under the hood" the database can process millions of values.
+Supporting this kind of workload, along with live queries, dependency tracking, and real-time
+collaboration, is where Airtable started to hit its limits. If you remember, the problem was that
+these workflows were limited by processor resources. The only way to speed them up is to use more
+processor cores. But the Airtable database was written in TypeScript and ran on NodeJS, which
+fundamentally executes JavaScript on a single main thread. So one core can be loaded while the other
+cores remain mostly idle. Of course, there are ways to add parallelism to NodeJS, but they create a
+problem that directly contradicts Airtable's architecture. Employees need quick access to the entire
+database, and this database exists as a large data structure in RAM, which, as you remember, can
+take up tens of gigabytes for large corporate clients. So if each process runs in its own memory
+space, you suddenly need multiple copies of that data. Not only is this extremely expensive in terms
+of memory, but every edit now has to propagate to all of these copies to maintain their integrity.
+So Airtable was trapped between two limitations. Data must remain in memory to achieve the
+performance that users have come to expect. But the language runtime made it difficult to distribute
+computations across multiple processor cores while working with the same state in memory. The
+bottleneck was not the hardware , but the programming model, and this forced a much more serious
+decision to be made—to rewrite the database. So they rewrote the heart of their backend, that is,
+the entire in- memory database, in Rust. Rust provides high performance and fine-grained control
+over memory without a whole class of memory safety bugs that arise with low-level programming. In
+addition, they were already using small Rust modules in their application. So they knew how to run
+Rust in production and how to combine the two languages. However, it was the rewriting that allowed
+these limitations to be overcome . Database data is now stored in shared memory, which multiple
+threads can safely read simultaneously. The worker runs one write thread, a whole pool of read
+threads, and a dispatcher that routes each incoming request to the right thread so that many cores
+can finally work with one database in parallel. Since they were creating a real database this time,
+they provided it with proper guarantees, such as transactions with MVCC ( multi-version concurrency
+control)—a mechanism that allows readers and writers to avoid blocking each other—as well as
+indexes, foreign keys, uniqueness constraints, and triggers. All of this took about 3 years of
+development, testing, and migration, and now the system is already serving real client traffic. This
+is the same step, if you remember from my video about Discord, which they made famous by switching
+to another language, Rust, for performance, and Airtable did this with their database engine . And
+now this new engine decides what happens when two people access the same cell at the same time. So
+what happens when two people edit the same cell at the same time ? Airtable's answer is surprisingly
+simple. Each database has one write stream. Regardless of where the changes come from, all database
+access rights go through a single channel and are applied sequentially in a well- defined order,
+meaning that two edits can never occur at the same time. They line up. One is applied first, and the
+other is applied immediately after it. If both users change the same cell, the last change wins. The
+idea is that the database never ends up in an ambiguous or partially updated state. At first glance,
+this seems like a recipe for conflicts, because if one thread is responsible for each record, won't
+everyone be waiting for each other? And this is where the reading process works differently. The
+read thread pool continues to service requests while write processing continues . And because the
+system uses MVCC, readers can see a consistent snapshot of the database without blocking the current
+update. This leads to a clear separation. Records are serialized through a single, ordered path that
+maintains data consistency, and reads are performed in parallel, ensuring fast product performance.
+So , there is one writer and many readers, as well as one shared copy of the database in memory, and
+the most interesting thing is that Airtable had to implement all this while millions of users were
+actively working in the system. They had to replace the old architecture without losing any data or
+interrupting collaboration between users. Replacing a database under a running product is one of the
+riskiest things a software development company can do. If the new system behaves even slightly
+differently, you're getting more than just a performance bug. You receive corrupted customer data.
+Airtable's first step was to create a stable interface between the application and the database.
+Instead of allowing the product to talk directly to a specific database, they inserted a layer in
+the middle that “spoke” the language of Airtable on one side and the language of database operations
+on the other. It sounds like a small architectural detail, but it changed everything. The product
+could continue to develop in TypeScript while the new database was independently developed in Rust.
+This allowed them to steadily release new features to the app while the database migration happened
+gradually, instead of stopping development for several years. Then came the part that made migration
+safer. Over a long period, many operations were performed simultaneously in both databases—the old
+and the new—and both produced responses that were then automatically compared. If they didn't match,
+Airtable investigated the reason; They didn't stop there and created tools that constantly compared
+entire datasets across both systems, looking for any discrepancies, no matter how small . Before the
+new database was entrusted with productive traffic, it had already processed the same workloads as
+the old one millions of times. Every discrepancy was identified, analyzed, and corrected. And this
+is a lesson that should be used in your own systems. You shouldn't carry a critical system by simply
+turning it on and hoping for the best. You run the old and new systems in parallel. You tirelessly
+compare their results and switch to a new one only when the differences disappear . And that leaves
+us with two questions. Where is all this data actually stored? And why did Airtable even decide to
+undertake such an ambitious migration? Storing the database in memory makes it fast, but memory is
+not where data lives permanently, because RAM is volatile. If the power goes out, everything
+disappears. So this in-memory database is actually a service layer. A reliable copy of the data is
+stored on disk. And when a worker process takes control of the database, it loads this data into
+memory before it starts processing queries. And this creates an interesting "bottleneck". So, once
+the database is in memory, it runs extremely fast. But the most expensive operation is exactly how
+it gets there. So loading large databases, restoring their state in memory, and recovering from
+failures—all depend on storage and replication systems. That's why Airtable has invested heavily in
+infrastructure around the database itself , such as replication, reliable logs, snapshots, and
+faster recovery mechanisms that reduce the time between the database being on disk and being ready
+to run in memory. But the main question is: why redesign the database at all? For most of Airtable's
+history, the system has been optimized for people. People type slowly. People make a few edits, run
+a few queries, and automate something every now and then. AI completely changes this assumption. The
+agent does not interact with the database at human speed. It can read thousands of records, perform
+a large number of updates, and run continuously for hours . And unlike humans, it rarely comes
+alone. Organizations can launch fleets of agents that work on the same data simultaneously.
+Suddenly, the workload is no longer determined by people. It is determined by software acting on
+behalf of people. A system designed for human-scale interaction must withstand machine- scale
+interaction. It was this pressure that justified the restructuring of the entire database
+foundation. And that's what led Airtable to the next evolution of its architecture . Now Airtable
+has also added AI-powered search. Instead of searching for exact keywords, you can ask, for example,
+to find similar campaigns. And you can get results based on the meaning of those words. But at the
+heart of such a query are embeddings (vector representations). Each row is converted into a vector,
+which is a numerical representation of its contents. So lines on similar topics end up next to each
+other, even if they don't have the same words. So, search is one use case. Another is to discover
+connections . Airtable can review a project description and suggest linking it to a team or record
+that wasn't mentioned directly, simply because their embeddings are semantically similar. The most
+interesting thing here is not the AI ​​itself. And where Airtable decided to store it. At first
+glance, the obvious answer would be an in- memory database. Other data is stored there , and it is
+optimized for quick access. But embeddings are actually huge. A vector can be about an order of
+magnitude larger than the string it represents. And memory is one of the most expensive resources in
+the Airtable architecture. Storing embeddings in the main database would mean paying for memory for
+each row in each database. So Airtable made a different choice. Operational data remains in the main
+database, while embeddings live in a separate vector database. They chose Milvus primarily because
+it can be hosted on their own servers, while storing customer data in Airtable's infrastructure.
+This separation also allowed for another important decision. Embeddings may lag slightly behind the
+original data. Generating an embedding requires calling an AI model, which is too slow for user
+transactions, and if every edit waited for a new embedding, the product would immediately become
+slow. Instead, Airtable updates embeds asynchronously and keeps track of which ones need updating .
+An operational database remains strictly consistent, while a vector database may catch up a little
+later. So when you perform a search, Airtable converts the query into an embedding, queries the
+vector database for the closest matches, retrieves the corresponding row IDs, and then loads the
+latest versions of those rows from the main database. The result is a clear division of
+responsibilities. The in-memory database remains compact and optimized for working with current
+data, while large AI vectors live in a system specifically designed for similarity searching. And
+with all these elements in place, we can finally trace a single edit across the entire architecture.
+So let's put it all together and track one edit in Airtable. Imagine you drag a row to a new
+location and update the value in it. Your browser sends this change to Airtable, and the request is
+routed to the worker currently responsible for your database. This worker already has your entire
+database loaded into memory . The edit is sent to the appropriate thread and applied within the
+transaction . If you move a row, the table does not renumber everything below it. It simply assigns
+the row a new position value between its neighbors, updating only the changed row. But the recording
+itself is just the beginning. When a value changes, Airtable traverses the dependency graph and the
+formulas that reference that value are recalculated. Rollups are updated. Lookups that display this
+value elsewhere are updated. Any subsequent records affected by the change are relisted in memory.
+Once the data is consistent again, Airtable reaches out to users who are viewing it. Each
+collaborator can see their own fragment of the database. Different filters, different sorting,
+different groups. Instead of rebuilding each view from scratch, the database calculates the smallest
+necessary change for each one and sends only that delta to the browser. So, the row moves, the value
+updates , and the screens refresh almost instantly. In parallel, the change is stored in permanent
+memory. Therefore, it is machine-aware, and if that row participates in Airtable’s AI features, its
+embedding is updated asynchronously and written to the vector database. From the user's perspective,
+the number has changed and the line has moved. But “ under the hood,” Airtable executed the
+transaction, updated the order, recalculated the dependency graph, generated deltas for each view,
+synchronized the collaboration, saved the change, and scheduled AI updates, all while keeping the
+database in memory. And this is the basic idea of ​​architecture. You keep working data in RAM ,
+perform resource-intensive calculations close to the data, and send only minimal changes to clients.
+So, we can take a few things from this video to use in our own systems, and each one is unique to
+Airtable. First, if your data fits in memory and the work is computationally intensive, storing the
+entire data set in RAM moves you from being I/ O-constrained to being CPU-constrained. Everything
+gets faster if you remember to use all cores and accept the fact that the tenant now has to fit on a
+single machine. Second, don't rerun the query to keep the view current . Calculate how a single
+record changes each active query and simply send the difference (diff). And it is this idea that
+makes real-time collaboration possible. Third, when you need to insert data into an ordered list
+without renumbering everything, use fractional indexing— the number between adjacent values. Fourth:
+your programming language and runtime environment can be a limiting factor. Performing resource-
+intensive tasks in single-threaded JavaScript is a dead end, and sometimes the best solution is to
+move the heavy logic to something like Rust. Next: when you need to replace something important, run
+the old and new in parallel and compare the results until they match, instead of immediately
+switching to the new. Sixth: Keep expensive data storage compact. Therefore, data that is constantly
+growing, such as embeddings that are growing tenfold, should be stored in a cheaper database, such
+as a vector database, where a deferred consistency model can be applied. This is the type of
+reasoning we delve into in depth in the Algor course—it's 12 weeks strictly for senior developers
+with real-world breakdowns of product systems like this one. If you find this helpful, the link to
+the course is in the description of this video. This is algor.io. So reading and processing all this
+information, as well as visualizing it in the form of such diagrams, takes a lot of my time and
+effort, especially after the main work. So subscribe to this channel, like, and share this video
+with your colleagues, and we'll see you in the next one.

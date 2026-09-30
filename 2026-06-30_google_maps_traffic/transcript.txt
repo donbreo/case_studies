@@ -1,0 +1,307 @@
+So, you enter your destination, and before you even leave the driveway, Google Maps gives you
+directions and a number. Let's say it's 23 minutes. Now this number already knows about the traffic
+jam you'll be in in about 20 minutes, and it's on a road you have n't even reached yet. And that's
+strange, because that shouldn't be possible. Almost every navigation tool you've ever used simply
+reacts to the road ahead. Whereas Google Maps doesn't do this. He doesn't tell you what the roads
+are like now. He tells you what they will be like the very second you arrive at each of these roads.
+So it directs you to the future, not the present. And it does so on a truly absurd scale. Over 2
+billion users, over 250 countries, a road network of hundreds of millions of connected segments
+spanning tens of millions of miles. So, that's almost every road on the planet. And Google Maps
+plans traffic on these roads. And all this happens in a matter of seconds. If you write backend or
+infrastructure code, this video will be very interesting for you because whatever we discuss in this
+video, you can use these steps in your own system design. Everything we discuss here is taken from
+Google's published research on planetary- scale routing, their work with Deep Mind on arrival time
+prediction, their engineering blog, and the S2 geometry library. The library is fully open source,
+so you can read the code yourself. I just took all the information from all these sources and
+compiled it into these charts that I'm going to show you now. And I have a bunch of backgrounds to
+walk through all of this . Now, I'd like to stay until the end to show you how Google Maps actually
+works, and also how one guy solved a whole street of traffic jams with a little red van full of
+phones. So I'll tell you everything in one sentence, and then we'll spend the rest of the video
+going into the mechanics of how it works. The map hardly changes, but the traffic changes every
+second . So Google treats them as two completely separate problems and instead of reacting to
+traffic as it is now, it predicts where the traffic is going and plots a route against the road as
+it will be when you actually get there. So everything we're going to discuss essentially follows
+from that, and a map that's actually stable, that doesn't change, gets a powerful intelligent
+structure on top, which makes routing across the continent very fast. And unstable traffic remains a
+thin living layer that can be constantly updated and predicted in advance . So now let's start with
+where the problem really begins , namely the map itself. Because to a computer, it's not just an
+image or a drawing. To a computer, a map is actually a graph. Each intersection is a node, and each
+road segment between two intersections is an edge. And each edge has a number that shows how long it
+takes to travel that segment of the road. So a short side street will have a small number. A long
+highway will have a higher number. So, essentially, the entire planet's road network becomes one
+giant graph , consisting of hundreds of millions of segments connected at intersections. So, it's
+too big for one machine. But we'll come back to that in a minute. But once your map becomes a graph,
+routing becomes one of the oldest problems in computer science. Find the cheapest path from one node
+to another. The classic answer is Ditra's algorithm, and it's the first thing you would turn to if
+you had a computer science background. And it works like this: you start where you are and fan out ,
+always expanding to the nearest place you haven't checked yet, until you reach your destination.
+Now, to visualize this, you imagine pouring water at your starting point and watching it spread down
+the street. And that's perfect for a small map, but the problem is the size of the maps that Google
+Maps works with. Okay, when you're going from Los Angeles to San Francisco, the airplane algorithm
+doesn't even move in the direction of San Francisco, because it doesn't even know which direction.
+All it really does is check the intersections in order of their distance from where you started. So,
+first everything within a mile of Los Angeles is checked, then everything within 2 miles, then three
+miles, and a circle around your starting point that just keeps growing. And that's actually the
+problem, because for this circle to finally reach San Francisco, its edge has to extend all the way
+there. And San Francisco is almost 400 miles away. So by the time it gets there, the circle has
+already engulfed everything within 400 miles of Los Angeles in all directions. San Diego to the
+south, the desert and half of Nevada to the east. So that's millions of intersections, and almost
+none of them are anywhere near the route you would actually take. And it's just too much work to go
+through while you're just sitting there staring at your phone, waiting for it to boot up. So no one
+actually calculates long routes this way once you ask them. So the first obvious improvement is that
+you stop searching blindly and then aim for your destination. And this is an algorithm called AARD.
+And at each step , on top of the distance to this point, you take into account approximately how far
+this node is from the target in a straight line. So the search actually leans toward San Francisco,
+rather than wandering through the desert to the east. This is essentially an improved version of
+dstras that has a compass. Think of it as Dixas' algorithm with a compass, or simply an improved
+version of Dixas. And that helps a lot over medium distances, like the one we've been discussing,
+but it's still not enough for an entire continent, because that straight line is weak when the
+actual route is hundreds of miles of connecting highways. So the actual conclusion is that no
+intelligent search you run when you query will be able to sort out the planet in a few milliseconds.
+And the only way out is to stop doing the hard work during the request altogether and move it all
+forward, before the requests even happen. So, you don't think street by street. You think you need
+to get out of my area, then get on the freeway, then drive on it most of the way, then get off the
+freeway near your destination, then figure out the last few streets. So, small roads only matter at
+the very beginning or at the very end. And Google is building this right into the graph. It adds
+shortened edges that allow the route to skip all unimportant small roads. So, one edge means
+traveling this entire stretch of highway in one hop. And the roads are sorted into a hierarchy. So
+local streets are at the bottom, major highways are at the top. And this technique is called the
+reduction hierarchy . So now the search doesn't actually crawl through millions of intersections .
+It aligns itself on shortcuts, travels across the country on highways in a few jumps, and returns to
+local streets at the other end. And to go even faster, it searches from both ends simultaneously and
+meets somewhere in the middle. The route that took Jitra millions of steps now takes only a few
+thousand steps. But here's the catch that makes the maps really difficult. These shortcuts were
+built on how long it takes to travel each road. And how long it takes to walk the road is exactly
+what changes throughout the day. A highway that only takes 8 minutes at 2:00 PM takes 25 minutes at
+6:00 PM. So, as soon as traffic changes , your pre-calculated shortcuts are based on the delayed
+information. So what are you doing? Are you rebuilding all these shortcuts every few minutes across
+the planet? Because this pre- processing is too expensive to repeat constantly. This is real tension
+in the center of the cards. Pre-calculation makes routing fast, and real traffic makes it correct,
+and these two things pull in opposite directions. So you're essentially splitting the map into two
+separate things that change at completely different rates, and you're preprocessing each of them
+differently. So one is the form of the network , for example, what roads exist, which connect to
+which. This is called topology, and it hardly changes. So you do the heavy expensive pre-processing
+once and keep it for a long time. The other is the cost of each road now, that is, the real-time
+travel time, which never stops changing. So the point is to build all your path shortcuts based only
+on the shape of the network, and leave the actual numbers until the last moment. So the expensive
+part depends only on the roads and achieves rapid filling of the passages at the current travel time
+every few minutes. And this family is called customizable route planning . So you separate what
+changes rarely from what changes every minute and recycle only the cheapest. And this pattern goes
+far beyond the cards. This is how Google handles a graph that is too large for a single machine. And
+as part of this pre-processing, they break the map into cells. Essentially, they break the country
+into regions and then break them down into smaller parts, like a grid overlaid on a map with
+multiple zoom levels. For each of these cells, they now pre- calculate the cost of crossing it from
+each entry point on its border to each exit. Thus, the cell collapses into a small summary
+description of itself, and the messy details of each tiny road inside are hidden. Now, the route
+across the country uses the streets around your starting point to reach your cell boundary, and then
+jumps from cell to cell across the country at these pre- calculated boundary crossings. It then
+drops down onto the streets around your destination at the far end, and each cell can be on a
+different car. And here's the part that ties it all together. When a movement changes, you
+recalculate the border costs only for the cell that is affected. So, this structure more or less
+stays in place, and only the cheap numbers move. So the same distribution that allows the graph to
+span thousands of machines makes real-time traffic updates available. Before we dive in, I want to
+take a few seconds to tell you about a cohort that I host every few months, and it’s called the
+Albero cohort. We mostly cover advanced system design and architecture for the post-AI world, and
+typically the people attending the classes are senior engineers such as SR platform engineers,
+principal engineers, enterprise and solution architects, and WE engineers. So these are usually
+people with five to 26 years of experience, and it's a great way to learn from real production case
+studies . So I want to go to the website alberok.io, which is algorq.io, which is alberok, and look
+at the list of topics that we're going to cover in the cohort. And if you like it, then I want you
+to fill out the form that will open when you click the " Reserve" or " Register" button. After you
+fill out the form, I will check if you are a good fit and we will arrange a call with you . So, pre-
+recorded sessions cost about $800. And if it's a real- time cohort class, it'll cost about $2,400.
+But you may have to join a very long waiting list for a live cohort class , as it only happens once
+every few months . And there may only be 15 to 20 engineers in one cohort. So, if you are early in
+your career and just starting out in engineering , this cohort group may not be of interest to you.
+And in that case, you don't need to fill out the form. Good. Now let's get back to the video. OK.
+So, this is how the maps find their way. But the path is only as good as the numbers on the roads.
+So where do you find these numbers? And where do these numbers come from? They essentially come from
+you, or , in fact, from everyone. So every phone running Google Maps reports a small, anonymous
+piece of data. He always tells you where he is and how fast he is moving. One phone on the road says
+almost nothing . But hundreds of phones on the same road, crawling along at 6 mph, tell you that
+there is a traffic jam on the road right now . So there are no cameras or sensors buried in the
+pavement. The crowd using phones is actually a sensor for Google Maps. And Google essentially
+aggregates all these anonymous speeds on each road segment, and it becomes a layer of live traffic.
+And here's the traffic story I was talking about. An artist in Berlin loaded 99 phones into a little
+red cart and slowly drove it down an empty street, and Google Maps lit up the street red and started
+showing a traffic jam, even though there wasn't a traffic jam because, as far as Google Maps could
+tell, there were 99 cars crawling along. So, the system imagined that there was a traffic jam. And
+therein lies the problem, because GPS is inaccurate. The location reported by your phone may be off
+by a few meters. And that's enough to end up on the wrong road inside a building or in a river
+flowing next to the highway. So, before any of this works, Google has to figure out which road
+you're actually on , based on a noisy point bouncing around several different streets. And this is
+called card matching. One GPS point is ambiguous, but their trace is not. Your last 10 points
+roughly follow the curve of one particular road, and it's almost certain that you're on that road.
+Even if any individual point may seem strange, the combination of all these points together creates
+the impression that you are on this particular road. The standard tool for this is a hidden Markov
+model, which is just a formal way of choosing the most likely sequence of paths that explains all
+this confusing trade-off. And that's what keeps your blue dot glued to the road when you look at
+Google Maps. And this is also what ensures the purity of the crowdsourcing traffic, because each
+phone's speed is counted towards the correct segment , rather than being spread across three. So
+knowing the current traffic conditions is one thing, but for a 40-minute drive, traffic conditions
+are almost irrelevant right now . What matters is what each road will be like when you actually
+reach it, which could be in about half an hour. So this congestion you see on the opposite side of
+the cards has not yet affected you, and it may clear up or worsen before your arrival. So Google
+Maps doesn't just use current speeds, it actually predicts future ones. And the main ingredient here
+is history, because this stretch of road has been traveled millions of times, and it has a rhythm .
+So every day around 5:30 it's slow, and on Sunday morning it's clear. So Google has years of data
+for each segment. So for any road at any future time, it already has a strong baseline assumption
+based on the pattern alone, and that essentially gives each segment a daily speed curve. Now,
+really, only history has a blind spot, and the pattern tells you about a typical Tuesday, but today
+could be an atypical Tuesday, and the slowdown emanating from one highway changes every road that
+connects to it . So, in addition to the historical baseline, Google offered machine learning that
+works with deep intelligence, and the model fits the problem perfectly because it treats the road
+network exactly as it is – as a graph. And they group the connected road segments into parts that
+they call supersegments, and then they run a graph neural network, which is a model that looks at a
+node along with all of its neighbors at the same time. So when it predicts what your road speed will
+be in 20 minutes , it doesn't consider that road in isolation. It looks at the entire connected area
+and how traffic enters and exits it. And that's how she detects a traffic jam that's about to spread
+before it fully forms. The historical curve sets the baseline, and the network bends it to match
+what is actually happening in the area today. And here it all comes together. When Maps plans your
+route, it doesn't plot it on the map as it currently appears. They actually walk your path forward
+in time. So, they start with your departure time and ask the first road, how fast are you going at
+this point? And then they add that travel time, which takes them to a later point, and then they ask
+the next road, how fast will you be going at that time, and the next, and the next. So every road
+assessed at the predicted time will actually be standing on it. So, if you think about it, the edges
+in a graph are no longer fixed numbers. They are actually small functions of when you arrive. And
+this is called time-dependent routing. And that's why your estimated arrival time already takes into
+account the traffic jam 20 minutes ahead. So the search literally looked segment by segment into the
+future, before you even pulled off the driveway. And that's the best route for the road as it will
+be while you're on it, not the road as it is now. And your arrival time is simply the sum of all
+these predicted segment times, each measured at the moment you expect to be there. So you add them
+up, and you get 23 minutes. It doesn't just stop once you start moving. Your phone is constantly
+reporting on the situation, the real-time traffic layer is constantly updated from everyone else,
+and Maps is constantly checking to see if your route is still the best. An accident somewhere on the
+highway slows down the highway ahead, and the cost of those segments starts to increase, another way
+becomes cheaper, and then the maps start to change your route. So, in addition to the predicted
+traffic, it layers in individual events like closures, roadworks, accident reports, and a lot of
+that comes from roads that Google actually owns now. And then it shows you two or three options. It
+intentionally finds truly different paths that are close to optimal, not 10 variations of the same
+road. This is why the route changes as it moves and the arrival time starts to shift because it
+keeps repeating one cheap search in a layer of traffic that never stops. Okay , so we've discussed
+the routing brain so far, but now we want to talk about the actual map that we're looking at,
+because drawing the entire planet has its own problem. So when you make a request, Google can't send
+you the entire world, and it can't redraw the planet every time you pan or zoom out. So the world is
+cut into tiles, which are small squares that fit together like a grid . And this scaling has a clear
+structure. At the most reduced level, a few tiles cover the entire Earth. So you zoom in at each
+step, each tile is divided into four. And if you zoom in, each of them will be divided into four. So
+each level, tiles, increases the detail in the tiles by a factor of four . And this is the structure
+of a quadtree. This is a very well-known and popular data structure. And it also means that wherever
+you are and however far you zoom in, Google only gives you a few tiles covering your little slice of
+the world, and nothing more. And these tiles are cached and served from machines located near you.
+So they appear instantly. You never download the entire world to your phone. You simply load nine
+little squares at any given time. And there's one detail in these tiles that's worth pulling out,
+because it changed the way all of mathematics feels. The old way was to render each type into a flat
+image on the server and send you the image. But the image is fixed . You can't turn it smoothly. You
+can't tilt it in 3D. And to change the map style, say, to switch to dark mode, Google would have to
+redraw every image on Earth. So Google Maps switched to vector tiles. Instead of an image, each tile
+is a small package of instructions, for example, this road is a line from here to there. And this is
+a park. This is a building. And your phone does the actual drawing on the GPU. And that's why you
+can rotate the map, tilt it in 3D, and zoom without turning too much. Your phone redraws it in real
+time from any angle you want. And the packets are actually smaller than the image, which is actually
+really important if you have a weak connection. So we're just following the same trick that we saw
+in this video earlier, which is you move the work to where it's cheapest, which in this case is to
+the users' devices, not to the Google server. So, there's another problem with the code , and it's
+actually quite insidious. Google Maps constantly has to answer questions like: what is near this
+point, what gas stations are around me, which road is this point closest to, and what is inside the
+area I'm looking at. Databases are great for searching for these things by a single sorted value ,
+such as a name or a number. But location has two meanings: latitude and longitude, and " nearby"
+actually has two dimensions, and it's hard for a regular database to find. So Google has created
+something really clever. This is a system called S2. They take the curved surface of the Earth and
+draw a single line across it, snaking through each region, bending it back and forth in a careful
+pattern, so that points that are close together on the Earth end up close together along the line.
+And then every place on the planet gets one number similar to its position along this line. And now
+"near" in the real world means close numbers that a regular database can instantly sort and search.
+They turned a complex two-dimensional problem into a simple one-dimensional one. So bringing
+multiple dimensions down to a single sorted key is one of the most useful ideas in this entire
+field, and I would advise you to keep it in your back pocket so that you can use it in all the
+systems that you actually build. The best part is that S2 is actually open source. So you can go and
+read exactly how the curve is constructed. And the great thing is that at 26 you don't even have to
+do that. We can simply point your cloud code to this repository and it will give you a nice summary.
+So the spatial index is also what provides the search and the little tags. When you enter an
+address, Google Maps should convert that text into a point on Earth. And this is geocoding. So when
+you touch a point, it should turn that point back into place. And this is called reverse geocoding.
+And when you search for coffee near me, it uses a spatial index to instantly pull up every coffee
+shop in your area. It then ranks them by distance, rating, as well as how well they match and how
+popular they are. And this is the same ranking problem that we looked at in the video about search
+just a few days ago. And underneath that is a massive index of hundreds of millions of places and
+businesses. Each one is a dot with a bunch of information attached to it. So a map is not just
+roads. That's roads plus a searchable index of practically every named thing in the world . All of
+this is tied to the same one-dimensional key. Until now, for all that we have discussed, we have
+taken for granted that the map even exists. But actually creating a map is a huge challenge in
+itself. Now Google actually collects it from multiple sources . Satellite and aerial imagery to
+identify terrain, buildings, and cars to view streets that have traveled tens of millions of miles,
+reading street signs, speed limits, and lane markings directly from photos using machine learning.
+And you may have even seen Google's street view cars if you live in a big city, especially in the
+US. It now also uses authoritative government data to determine boundaries and addresses, as well as
+a constant stream of corrections from users and local guides. And the roads themselves are actually
+extracted from the images using models that track the shape of the streets from the raw pixels. So
+the road map, on which all our routing is based, is not typed manually. It is largely machine-built
+from photographs of the planet and is constantly being adjusted. And this is the static half of the
+map, which is created once and kept up to date by adding new data. And now we'll talk about the
+other half that can never stand still , namely traffic. And we said that traffic is a thin, living
+layer that Google is constantly updating. But remember: measuring speed on every road on Earth every
+few minutes is a separate machine. So let's actually trace a single ping from your pocket to someone
+else's route. And it all starts with receiving data. So you have billions of anonymous pings like
+position and speed coming in continuously to Google's edge, and each one is mapped to a map on the
+right segment, and then a streaming pipeline aggregates them. So you aggregate every ping by road
+segment over a sliding time window and combine them into one current speed level per segment, and
+that's the current cost layer. So it is created as a continuous stream, not as a nightly batch job.
+And then the cheap pass we talked about earlier comes into play. This new rate passes the data to
+the setup stage, which calculates the border crossing costs only for the cell whose traffic actually
+traveled. And the heavy structure is never touched, and the updated layer is sent to the servicing
+fleet and cached on edge servers near you. So by the time you ask for directions, there's no planet-
+scale work left . So you reach a nearby server that has a structure that is practically constant and
+a cost level that is a few minutes at worst. And this is a template that you can use to design your
+system, namely: a hot path, which should be instant, and an update path, which can take a little
+while, and which is completely separate. And this is a very common pattern in systems design. You
+aggregate the fire hose in the background. You only recalculate the delta and then carry it over to
+the edge . And then you serve each read with something that is actually pre- computed and is right
+next to the users. Now, here's what I've been assuming all this time, that the number on each edge
+is essentially the travel time. But this is a choice number. And once you separate the graph
+structure from the cost, you put it on top of, for example, the route for X, just plugs into the
+cost function for X. So time is the default, but Google also routes for fuel. Now, eco- friendly
+routing sets a different number for each road . A machine learning (ML) estimate of how much fuel or
+energy you will burn while driving on this road. And it actually depends on things that vary over
+time, like the angle of the bank, how the traffic stops and starts, and even the type of engine,
+because a gasoline car, a hybrid, and an electric car burn energy differently. So, the same
+schedule, but completely different costs at the edges. And you can do it again to avoid tolls, to
+avoid highways, and to have fewer turns and traffic lights. So each of them is just another cost
+function on the same road structure. But here's the really tricky part. Now, the fastest route and
+the most efficient route are usually not the same road. So it stops being one shortest path and
+becomes a compromise between two different things. So Google calculates both. And when the eco route
+costs you almost no extra time, it suggests this route and allows you to spend a minute to burn less
+fuel. And that's the real idea hidden inside a small function. So you separate the structure from
+the cost and you can lay out a route for anything. And the moment the two costs coincide, you are no
+longer looking for the single best path. You choose a compromise point. So now let's look at the
+trade-offs. First, everything you are following is a prepared version of the world. So it's always a
+little behind reality, and the map you see is just a slightly outdated snapshot. And closing this
+gap would mean re-doing the complex preprocessing every time the roads themselves change. Secondly,
+the entire history of traffic is a forecast, and forecasts are sometimes certainly wrong. An
+accident that just happened or an unexpected storm has no history. So your arrival time may be
+incorrect for a while until real-time data catches up. Third, the entire system is based on location
+signals from several billion phones. And that is why thorough anonymization of this data is
+unpleasant. This is actually what decides whether such a system is even acceptable for operation .
+Fourth, none of this is actually created once. Models are retrained, the road map is rebuilt, street
+view cars, images, and the maintenance fleet are running forever. So all of this is actually a very
+expensive business that Google has to pay a lot for. So, there are five things you can take away
+from this video and apply to your own systems. The first is to separate what changes slowly from
+what changes constantly, and treat each of them differently. The second is to anticipate rather than
+react, where possible. So Google Maps doesn't wait to intervene in traffic. It predicts every road
+and routes accordingly to what is coming. Third, your users can actually be your sensors. So Google
+didn't create a network of road sensors. He simply listened to where the phones were already
+located. Fourth, when a problem has many dimensions, simply reduce it to one dimension. The two-
+dimensional arrangement was inconvenient for the database. So Google turned the entire globe into
+one number on a line. Fifth, and this lesson was actually in the Google search video, as well as a
+few videos ago. So you put the work where it's cheapest to run . So the map you see is not drawn on
+Google servers. It is sent to your phone as an instruction, and your phone draws it. And we also saw
+this lesson in a WhatsApp video. So, if you haven't seen it yet , be sure to check it out. There is
+also a question you can ask yourself every time you create a new system. You might ask, what is
+actually changing slowly and what is changing quickly here, and can I anticipate the fast part
+instead of catching up with it? And in many systems, you can predict this much better than you
+think. It is these considerations that we use to deeply dive into the algorithm, which lasts 12
+weeks. This is for senior engineers only. We look at real systems and real trade-offs. The link is
+in the description. This is alberock.io. Reading all this information, condensing it and turning it
+into these charts, and diving deep into it takes a lot of time, effort, and hard work that continues
+after my full-time job. So don't forget to subscribe to this channel. Don't forget to like this
+video and share it with your friends. See you in the next video.

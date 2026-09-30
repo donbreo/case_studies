@@ -1,0 +1,323 @@
+In 2022, ByteDance published a research paper called Monolith. And you have to read this paper
+because this paper describes the recommendation system behind TikTok, which is basically the engine
+that decides every single video you see on the For You page. Now, inside this paper is a data point
+that changed how the entire industry thought about recommendation systems. And that data point is 30
+to 40 minutes. And that's basically how long it takes TikTok to build an accurate model of a brand
+new user's taste. Now, when you open the app for the first time, within roughly half an hour of
+scrolling, the system knows you well enough to keep you scrolling for hours. Netflix, by comparison,
+needs days. Spotify needs weeks, and YouTube actually needs months. So, what I've done is I've taken
+all the information from that research paper and other research papers that they've released, and
+all the engineering blogs that they've written to help us visualize how their recommendation system
+actually works. Now, I have a bunch of diagrams for you guys. It's taking a long time, and this
+video is going to be very visual. So, make sure you stick around till the end, especially if you
+want to understand how the entire recommendation system works, so that you can apply these concepts
+to your next interview, or to actually build products that scale well. Now, what makes TikTok's
+recommendations this fast is not a smarter algorithm or some secret feature. It's an engineering
+decision that ByteDance made about how the model should learn. And today's video is important if you
+work on any kind of personalization system. If you're a machine learning engineer, an ML ops
+engineer, a platform engineer running ML infrastructure, a back-end engineer building recommendation
+features, or a solution architect designing data pipelines for any product where user behavior
+matters. Now, a lot of people on subreddits think that TikTok's For You page got this good because
+they have better data scientists. But actually, they got this good because they made an
+architectural bet in how recommendations worked and nobody before them had done this ever. Now, this
+architectural decision that they made affects everything else that they do for recommendations like
+the way they store user embeddings, the way they get data from a user swipe into the model in
+seconds, and the way they run two models in parallel, one that learns and one that serves the
+recommendations. Now, the lesson that you should take away from this video, especially if you're a
+senior engineer, is that recommendation systems try to actually model a world, but most of the times
+the world actually changes faster than the model. But TikTok made an architectural bet where they
+were able to close the gap between the world and the model that was representing that world. Now,
+once you see how they did it, you'll see the same pattern showing up in fraud detection, in ad
+ranking, in dynamic pricing, in any system where the data is non-stationary. Now, by the end of this
+video, you'll understand what TikTok did, why nobody else had done it before, and what specifically
+about their problem made the cost worth it. So, let's get into it. Just a bit of context first. Now,
+to understand the decision by dance made, you have to understand the recommendation problem they
+were actually solving because TikTok's problem looks very different from what came before it. So,
+most of the famous recommendation systems like Netflix, Spotify, YouTube were built around a
+relatively slow world. Netflix has maybe 15,000 titles on the entire platform at any given point of
+time, and the catalog changes weekly. And the user might watch just one movie in a session, which
+means one recommendation decision in maybe two hours. Spotify has tens of millions of tracks, but a
+user's taste in music shifts over months, not minutes. And YouTube has billions of videos, but most
+of them are old and the system mostly has to figure out which old videos a person likes. Now, TikTok
+is the exact opposite of every one of those properties. The catalog of TikTok is effectively
+infinite. 10 million new videos are being uploaded every single day. A user watches 20 videos in a
+typical session, which means 20 separate recommendation decisions in just 10 minutes. And the
+catalog is unstable. A video that was hot 4 hours ago is dead now, replaced by something that didn't
+exist when the user opened the app. But the property that really breaks the standard playbook is
+this. User taste on TikTok shifts inside a single session. You start watching cooking videos and
+halfway through a finance video lands in your feed by accident. So you start watching the whole
+thing and now you're curious. So 60 seconds ago you were a cooking person and now suddenly you're
+something else. Now the problem is a typical recommendation system that retrains overnight will keep
+showing you cooking videos until tomorrow, by which point the user has already left the app. So the
+main question ByteDance asked themselves was, what if we stopped treating training of the model and
+serving of the recommendations as two separate stages? What if the model was always learning, always
+being updated while it was also serving live users? So you don't keep a separate time for training
+like overnight training. So the data flowing in from one user becomes training signal for the model
+that's serving the next user within minutes. And that's the architectural decision I was talking
+about which TikTok took, which was real-time online learning instead of batch retraining. Most
+recommendation systems update their models on a schedule like every 12 hours, every 24 hours,
+sometimes even a week, but TikTok updates its models continuously in production while billions of
+people are using it. And after this, every single architectural choice we're about to walk through
+is a consequence of this one bet. Now before we go deeper, let me give you the rough shape of the
+system. TikTok's recommendation system, which we call the monolith as you've seen from the research
+paper, is built on top of TensorFlow's distributed training framework, but heavily modified. It uses
+a parameter server architecture, meaning the model's parameters are spread across many machines that
+workers talk to over the network. It uses a custom embedding table that doesn't behave like a normal
+hash table. Data flows in through Kafka, gets joined in Flink, lands in the training worker, updates
+the parameters, and those parameters get pushed to every serving model every few minutes. And every
+component in this pipeline exists to make real-time online learning possible. Take any of these out
+and the whole system collapses back into a regular batch system. And let me show you why. But let's
+start with the foundation, which is how TikTok represents users and videos inside the model. In any
+modern recommendation system, every user is represented as an embedding, which is basically a list
+of numbers, and it could even be a few hundred of those numbers, and they capture something about
+the user's taste. Similarly, every video is also represented as an embedding. And those numbers
+capture something about its content. Now, the model's job, roughly, is to look at the user's
+embeddings and embedding of every candidate video and figure out which videos are the best match for
+which user. And this sounds quite reasonable until you do the math. So, TikTok has over a billion
+users, and the video catalog has many billions of items, and each embedding is say a few hundred
+floating-point numbers. So, the embedding table, which is the data structure that stores all of
+these, has billions of rows, and each row is a vector. So, that's an enormous amount of memory, and
+it cannot fit on a single machine. It has to be spread across the parameter servers. But the harder
+problem is that this table doesn't have a fixed size. New users sign up every second, new videos get
+uploaded every second, and this table has to grow continuously while the model is being trained and
+served. Now, standard TensorFlow embedding tables don't support this. They're pre-allocated to a
+fixed size. So, when the table fills up, the hash function maps multiple distinct keys to the same
+slot, and those keys end up sharing an embedding. And this is called as a hash collision, and it's a
+disaster for a recommendation system. So, here you can see a collision happening where there's a
+user called Akhil, another user called Yuki. They have different tastes, they're different users,
+but they're being served an identical feed. And you can see that most of the recommendations for
+Akhil are wrong, whereas most of the recommendations for Yuki are okay, and some of them also are
+noise. So, these collisions degrade quality silently, and you don't see them in the metrics until
+users start churning. In case you're not exposed to the word churning, it basically means that
+people start leaving the platform. It's a very common SaaS product term. Now, ByteDance was aware of
+this, and they decided they could not accept collisions at all. So, they decided that every user had
+to have their own embedding, and every video had to have its own. So, they built something called a
+collisionless embedding table as part of Monolith, which is the recommendation system, and we've
+seen the research paper for it. And we'll quickly talk about that just after this quick break. Okay,
+so before we go any deeper, I want to take a few seconds to tell you about a cohort that I teach
+personally to 15 to 20 senior engineers every few months, and it's called the Algo Expert and we
+cover advanced system design and architecture for the post-AI world. Usually, the people who attend
+are all senior engineers like SREs, platform engineers, principal engineers, enterprise solution
+architect, and VP engineering guys. So, there are people from 5 years all the way to 26 years of
+experience, and this is a great way to actually learn from real production case studies. The next
+cohort starts late June or early July, and I want you to go through the website algexpert.io, which
+is algorok.io, and go through all the topics we're going to cover. We'll cover modern systems like
+how Anthropic handles LLMs, and how Hugging Face handles so many sandboxes for AI models, and how
+Together AI hosts so many open-source models at scale. It's a 12-weeks intense program, and if you
+like these topics, I want you to fill up the form that opens up when you hit the reserve or the
+enroll button on top. Once you do that, I'll check to see if you're a great fit, and then we'll set
+up a call with you. Now, the live cohort, which is personally taught by me, is about $2,400, and if
+you just wanted access to pre-recorded videos, that's $800. If you're early on in your career and
+you're starting with engineering right now, this cohort might not be relevant to you, so please
+don't fill up the form. Okay, so the collisionless embedding table that we talked about is built on
+a technique called cuckoo hashing. It's named because of how the algorithm behaves. It kicks
+existing residents out of their slots the way a cuckoo bird does in another bird's nest. So, the way
+this works is you keep two separate hash tables with two different hash functions. When you want to
+insert a new user, you hash them with the first function and try to put them in the first table. If
+that slot is empty, it's done. If it's occupied, you evict whoever is sitting there, and you put
+your new user in the slot. Then you take the evicted user and hash them with the second function
+into the second table, and the same thing happens there. They might land in an occupied slot, so you
+kick out whoever is there, and the displacement cascades until everyone has a unique home. The math
+works out so that with two hash functions and enough capacity, every key ends up in exactly one
+slot, no collisions ever. But just guaranteeing no collisions is not enough at TikTok scale. The
+table would still grow forever. So, every user whoever signed up would keep their embedding in
+memory until the heap But just guaranteeing no collisions is not enough at TikTok scale. The table
+would still grow forever, and every user whoever signed up would keep their embedding in memory. So,
+ByteDance added two more mechanisms on top of the hash table to keep its memory footprint
+reasonable. The first one is expirable embeddings. Every embedding has a last seen timestamp. If a
+user has not interacted with the platform for a long enough window, their embedding gets evicted
+from the table. If they come back, they get a new embedding, and the model relearns their taste from
+their next interactions. The cost of keeping inactive users around forever turns out to be much
+higher than the cost of relearning about them when they return. The second one is frequency
+filtering. Some entries, usually new users or new videos, have so few interactions that the model
+cannot actually learn anything statistically meaningful from them. So, including them in the table
+just wastes memory and adds noise. So, low frequency entries get filtered out until they cross a
+threshold of interactions worth modeling. Now, between cuckoo hashing, expiration, and frequency
+filtering, the table stays bounded in memory while maintaining perfect collision-free
+representations for every user and video that actually matters. And that's the foundation that
+everything else sits on top of. Okay, so we've got the representation problem solved. Every user and
+every video has a unique embedding and you've understood that. The table stays bounded. Now, the
+question is how the model actually learns from incoming user behavior in real time. And this is
+where things get genuinely difficult. The moment you decide to train the model continuously, you hit
+a problem. The model that's being trained is constantly changing. Its parameters are being updated
+millions of times per second as new data flows in. But the model that's serving recommendations to
+actual users has to be stable. It has to respond in well under 200 milliseconds every time, billions
+of times per day. You can't have a model that's serving production traffic while its parameters are
+simultaneously being rewritten by gradient updates. The serving model would behave unpredictably
+from request to request. So, they did something that's quite genius. They separated the two models.
+They run two parallel copies of the model. The first is the training model. This is the one that's
+constantly being updated as new user behavior streams in. It lives on the training parameters server
+and the training model is allowed to be a little messy. It can have new parameters that haven't been
+validated yet and can have partial state and experimental updates. It's a moving target. And the
+second one is the serving model. This is the one that's actually deciding what video to show every
+user. It lives on the serving parameter servers. The serving model has to be reliable, fast, and
+deterministic. It cannot just change in the middle of a request. It serves whatever parameters it
+has, and it serves them billions of times per day with the same boring consistency. The bridge
+between these two separated models is something called as the parameter sync. Every few minutes, the
+latest validated parameters from the training model get pushed across to the serving model. And the
+serving model then keeps running with the new parameters, picking up everything the training model
+has learned in the last interval. And this decoupling is the kind of design decision that sounds
+obvious once you see it, but it's actually quite subtle. The temptation when you're building real-
+time machine learning models is to have a single model that's both trained and served. It seems
+simpler. The problem is that the reliability requirements of training and serving are completely
+incompatible. The training pipeline can fall behind, can crash, and can be experimented on, but the
+serving pipeline cannot. If you tie them together, the lower bound on serving reliability becomes
+the upper bound on training experimentation. By splitting them with an async sync, neither one
+constrains the other. There's a general principle here worth pulling out when two parts of a system
+have very different reliability requirements, decouple them with a buffer that absorbs the
+difference, and don't make the reliable side depend on the unreliable side subtime. Now, let's talk
+about the data pipeline because the way data gets from the user's swipe into the training model is
+genuinely tricky, and it's a problem that doesn't really come up in batch systems. Now, to train the
+model on a single example, you need two pieces of data. The first is the features of the video that
+was shown to the user by the system, like what category was it, what creator made it, how popular
+was it at that moment, and what was its content embedding? So, all of that. The second is the action
+that the user took. Did they watch the whole thing? Did they scroll past in 2 seconds? Did they like
+it? Did they share it? But, these two pieces don't arrive at the same time. The features are known
+the moment the recommendation is made, like when the serving model decides to show a video, it can
+log everything about the video right then. The action is unknown until the user takes it, which
+might be anywhere from 1 second to 30 seconds later, sometimes more if the user rewatches it. Now,
+you can't train the recommendation model on either one alone. The features tell you what was shown,
+but not how the user reacted. The action tells you how the user reacted, but not what they were
+reacting to. You need them joined into a single training example before the model can learn from it.
+The way Monolith or TikTok's recommendation system handles this is features and actions go to two
+separate Kafka topics. Kafka is the buffer that absorbs the firehose. Features get written to one
+topic the moment a recommendation is made. Actions get written to another topic the moment they
+happen. Both streams can run at their own speed. Then, a Flink streaming job sits on top of both
+these topics and does an online join. As features flow in, the joiner caches them in memory keyed by
+a unique recommendation ID, and as actions flow in, the joiner looks up the matching features by ID,
+joins them together, and emits a complete training example downstream to the training worker. Now,
+there's a window involved, and if an action does not show up within some reasonable time after the
+features, the joiner emits the example as a negative signal, suggesting that the user implicitly
+ignored that video. And the features show up without ever getting a matching action, eventually they
+age out. So, our output is a clean joint stream of training examples flowing into the training
+worker continuously. Now, if you look at most of the explanations of TikTok's recommendation system
+online, you'll see that they skipped a very interesting part. They focus on the model, but the model
+is actually fairly standard for its time. The hard engineering is in the data pipeline that gets the
+right data into the model fast enough. The model is what learns, the pipeline is what makes learning
+possible. Now, let's talk about what happens when you actually open TikTok and the system has to
+decide what video to show you. Because the model can't possibly score every single video in the
+catalog against you. That would be billions of scoring operations per request, which is impossible
+in 200 milliseconds. So, the system breaks the recommendation problem into two stages. The first one
+is called candidate generation or retrieval. The job of this stage is to take the entire catalog of
+billions of videos and narrow it down to a small set of maybe a few hundred candidates that have a
+reasonable chance of being good for this user. Now, retrieval has to be fast and approximate. It's
+allowed to miss some good videos as long as it captures most of them. And TikTok uses what's called
+a deep retrieval architecture for this, which is essentially a learned tree structure up can map a
+user embedding to a set of candidate videos without iterating through the whole catalog. The second
+stage is called fine ranking. The fine ranker takes those few hundred candidates and scores each one
+carefully predicting how likely the user is to watch the video, like it, share it, comment on it,
+and complete it. The candidate with the best combined score wins, and that's the video that gets
+served. The scoring formula is interesting because it's not just optimizing for one thing. It's a
+weighted combination of multiple predictions. Like predicted watch time, predicted like, predicted
+share, and comment. And each prediction has a business weight assigned to it. A share might be
+weighted five times higher than a like because a share is a much stronger signal of value. And a
+complete watch on a longer video might be weighted higher than a complete watch on a short video.
+This multi-objective approach is why TikTok feels different from systems that optimize purely for
+engagement. By weighting different signals against each other, the product team can push the system
+towards different behaviors, like more diverse content, more high-quality content, less repetitive
+content, without having to retrain the model from scratch. And the reason this two-stage
+architecture matters for the real-time story is that it's where the serving model actually gets
+used. Every 200 milliseconds, billions of times per day, the serving model is running this two-stage
+pipeline. Retrieval narrows the catalog, ranking picks the winner, the user sees a video, and
+meanwhile, in the background, the training model is continuously updating itself based on the
+actions every other user is taking, ready to push new parameters into the serving model at the next
+sync. There's one more thing about TikTok's system that's worth understanding, and it's that the
+signals the model trains on are mostly things you didn't know you were doing. Most recommendation
+systems lean heavily on explicit signals like likes, comments, shares, follows, and the user has to
+consciously do something for the system to learn. TikTok deprioritizes these. Likes are valuable,
+but not the primary signal. The primary signals are implicit, things a user does without thinking
+about. The strongest implicit signal is completion rate. Did the user watch this entire video, or
+did they just scroll past it? A complete watch on a 15-second video is one of the strongest possible
+signals that the user enjoyed it. Watching 7 seconds of a 10-second video is almost as strong.
+Watching 1 second out of 15 is one of the strongest negative signals that the user actively actually
+rejected this video. The second strongest is rewatches. If the user watches a video, then watches it
+again, the system weights that disproportionately. Rewatches are rare, and they signal something
+more than enjoyment. They signal that the video had something the user wanted to study or savor. And
+then there are the subtle ones like scroll velocity, pause duration, or whether the user tapped to
+see the comments, whether they checked the creator's profile. Each of these is a low-volume signal
+on its own. Combined across millions of users, they add up to a very high-resolution picture of
+taste. The reason this matters from an architectural perspective is that implicit signals are dense.
+Every user generates thousands of them per session. Explicit signals are sparse. Most users never
+like or comment on most videos they watch. A system trained primarily on explicit signals is
+training on a tiny fraction of the actual user behavior, and a system trained on implicit signals
+has orders of magnitude more data to learn from. This is also why TikTok's recommendations feel
+creepy to people who think the system is reading their minds. It's not reading your mind, it's
+reading your thumb. The thumb generates more data than the conscious like button ever could, and the
+data is more honest. You can lie about what you like by liking the wrong videos, but you can't lie
+about what you actually watched. There is one more design decision worth covering, and it's a trade-
+off that looks bad until you understand why it makes sense. In conventional distributed machine
+learning, you want strong consistency in the parameter updates. All the training workers should see
+the same version of the model parameters at the same time. If worker A updates a parameter, worker B
+should see that update before computing its next gradient. Otherwise, the gradients get computed on
+stale parameters, and the model converges in weird ways. Monolith deliberately relaxes this. The
+training workers can be operating on slightly different versions of the parameters at any given
+moment. The parameter servers don't enforce strict ordering on updates. Sometimes, a worker computes
+a gradient based on parameters that are a few seconds out of date. Now, this sounds wrong if you've
+never built a distributed training system, but the alternative, which is strict consistency across
+thousands of workers and parameter servers, would force the whole training pipeline to slow the
+speed of the slowest worker on every update. Real-time training would become impossible. So,
+ByteDance took the trade-off, which is accept some asynchrony in parameter updates, get continuous
+real-time training in exchange, and the ML penalty for the slight staleness turns out to be small.
+Recommendation quality does not suffer noticeably from training on parameters that are seconds
+behind the absolute latest. And this is a great example of an engineering decision that's strong in
+isolation and right in context. Strict consistency is the right answer when speed does not matter.
+Eventual consistency is the right answer when speed is the whole point. Knowing which one you need
+is part of the senior engineer's job. Now, let's be honest about what all of this cost them because,
+as senior engineers, we don't get to skip the trade-off. The real-time training decision is
+expensive in ways that don't show up on a model accuracy chart. TensorFlow's default training loop
+does not support real-time online learning at TikTok scale and the default parameter servers don't
+support collisionless embedding tables and standard data pipelines don't support streaming feature
+joins. ByteDance had to build all of this from scratch on top of TensorFlow's primitives and then
+maintain it forever. Most teams could not have done this. They would have spent two years on the
+framework before getting to the actual model and then never shipped anything. So, this cost them
+permanent operational complexity. A continuously training production model is a continuously failing
+production model. The training worker can crash, the parameter sync can fall behind, the Kafka
+queues can back up, the Flink joiner can drop events under load, the collisionless embedding table
+can fragment over time. Every one of these failure modes has to be detected, alerted on, and
+recovered from automatically because the alternative is the model quality degrades and nobody
+notices until users start churning. The ops burden for this kind of system is enormous and it never
+goes away. It also cost them reproducibility. When something goes wrong with the recommendations,
+let's say a segment of users start getting weird content or engagement drops for an unextreme
+reason. Debugging is much harder than with the batch model because the model that served those bad
+recommendations five minutes ago is gone. The parameters have already moved on. You can't replay the
+exact state. You can only reconstruct it approximately. This makes incident response slower,
+debugging less precise, and root cause analysis fundamentally different from how you would do it in
+a batch system. But, for ByteDance, the bet paid off enormously. The For You page is the product,
+the For You page is the model, and every minute of latency they shaved off the learning loop was a
+minute the model spent better understanding what users want. compounded across a billion users, that
+compounds into the engagement metrics that built into what it is today. This is the lesson.
+Aggressive real-time systems are never free. You pay for them in engineering effort, in operational
+complexity, in debugging difficulty, in the expertise required to maintain them. The TikTok
+algorithm that feels magical to users sits on top of a system that's painful to operate, hard to
+debug, and impossible to fully reproduce. Don't look at the engagement metrics and conclude that
+real-time ML suddenly easy. Look at them and understand what kind of engineering it took to get
+there. Okay, so now time for some takeaways. So, five things. First is the speed of your feedback
+loop is more important than the sophistication of your model. They does not beat Instagram or
+YouTube by having smarter models. They beat them by closing the gap between user behavior and model
+update down to minutes. Second is that batch training and online training are not just different
+cadences, they're different architectures. It's tempting to think that you can take a bad system and
+just make it run more often because you can't, not at scale. The data pipelines, the embedding
+tables, the parameter servers, the streaming joins, every layer has to be designed for real-time
+from the start. Third, when training and serving have different reliability requirements, decouple
+them with a buffer. Monolith's two model split is a kind of decoupling that makes a complex system
+safe to operate. The serving model can keep running through any failure of the training pipeline.
+The training model can be experimental even though serving cannot be. Fourth, at scale, the hard
+problem is usually data engineering, not modeling. Most of Monolith's interesting work is not in the
+ML, it's in the Kafka queues, the Flink joiner, the collisionless embedding tables, the parameter
+server architecture. The actual neural network is fairly standard for its time. Fifth, decide what
+consistency you're willing to trade away. Monolith accepts eventual consistency in parameter updates
+because the alternative is slower training. They lose strict consistency, they gain real-time
+learning, and every distributed system at scale eventually has to make a trade like this. Perfect
+consistency or fast operation or low cost. And this is the kind of thinking we go deep on in the
+AlgoRock cohort. It's 12 weeks, highly intensive, real systems, real tradeoffs. If that's useful to
+you, check out the algorock.io link in the description. Okay, let's wrap this up. So, TikTok's
+recommendation system works because ByteDance made one decision early, the model should learn from
+your behavior in real-time, not on schedule, and they built every layer of the architecture
+underneath it to make that possible. Collisionless embedding tables that grow without limit, two
+model split between training and serving, Kafka and Flink for streaming feature joins, parameter
+servers with a relaxed consistency, two-stage retrieval that scales to billions of candidates,
+implicit signals over explicit ones, continuous training, continuous serving, continuous learning.
+Every single piece exists because the central decision required it. The lesson is bigger than
+TikTok, though. The lesson is when the world you're modeling changes faster than your model can be
+retrained, you lose. Making these deep dives take a lot of work, so please don't forget to
+subscribe, like, share, and I'll see you in the next video.

@@ -1,0 +1,300 @@
+So, in 2015, every tech company on Earth was racing on to AWS. It would be startups, banks, and even
+Netflix. But Dropbox was the only company that went in the other direction. They started moving off
+of it. And by 2017, they had migrated about 20% of their user data away from S3 and onto their own
+infrastructure. That means their own data centers, their own custom-designed storage hardware, their
+own software stack for storing what was at the time hundreds of petabytes of user files. And the
+thing is, they didn't do it because AWS failed them or because of some philosophical objection to
+the cloud. They did it because they ran the math and figured out that at their specific scale, with
+their specific workload shape, owning the metal was going to save them tens of millions of dollars a
+year forever. And by 2017, the SEC filing for their IPO showed that they had cut their
+infrastructure costs by $74.6 million over a 2-year period. And by recent estimates, the savings are
+well past $100 million a year. And it doesn't just end there. Because the team that did this
+migration, they did not just disappear back into writing CRUD APIs. They built one of the most
+sophisticated storage systems on the planet with custom hardware that uses storage technology that
+nobody else was using at this scale. So, in this video, we're going to walk through what Dropbox
+actually did. And the reason the story matters, even for engineers who will never have to build
+their own data center, is that buried inside all of this is a framework for thinking about one of
+the hardest decisions a senior engineer will ever have to make. And that decision is when do you
+stop renting and start owning? And the obvious answer might be whenever it's cheaper. But that
+answer is actually wrong. The actual answer is way more interesting and has to do with the shape of
+your workload, not just its size. And by the end of this video, you should be able to understand
+exactly why Dropbox could justify this move and why almost no other company on the planet could. And
+what specifically about your own workload you will have to look at to even start asking this
+question. So, let's get into it. Now, one thing to keep in mind before we move forward is that AWS
+wasn't actually too expensive for Dropbox. AWS was just too expensive for one specific workload that
+Dropbox had, which was storing massive amounts of user file data, especially at the scale that
+Dropbox had reached. For other workloads, AWS continued to be the right choice. Dropbox still used
+AWS for many things even after the migration. In fact, in 2022, they expanded their AWS usage again
+for new geographic regions because spinning up a new data center in Europe did not make any sense
+when they could just rent capacity. So, you know that the cloud is good at elasticity. It lets you
+pay for capacity you only sometimes need. And the cost of that elasticity is a margin big into every
+gigabyte and every CPU hour. If your workload is small or unpredictable or variable, you're getting
+your money's worth. The cloud's flexibility is genuinely cheaper than building all of this yourself.
+But, there is a catch. If your workload is huge, steady, and specialized, meaning you know exactly
+how much capacity you need, then that number grows in predictable ways, and the access pattern is
+something you understand deeply already, then you're paying for elasticity that you don't really
+need. Because you would be paying the cloud's margin on top of the hardware costs that you would be
+incurring anyway for capacity that's always full. That's the Dropbox situation. They had hundreds of
+petabytes of user data sitting there, and the growth was predictable. The access pattern was
+specific. Most files are written once and read rarely. They knew exactly what they needed. They
+didn't need elasticity. They needed cheap, dense, and reliable storage. And at their scale, they
+could build that themselves for a fraction of what they were paying. So, this isn't cloud is bad.
+It's renting things that you don't need is bad. So, these are two different lessons. And the next
+question is, how did Dropbox actually figured out they were in that zone? Okay, let me walk you
+through some quick math. In 2015, Dropbox was storing somewhere around 100 petabytes of user data on
+Amazon S3, which is half an exabyte. And that's the number that doesn't really fit into our heads.
+So, let me put this differently. If you had to back up Wikipedia onto floppy disks, you would need
+about a million of them for just the text alone. Dropbox was storing the equivalent of about 10,000
+Wikipedias in pictures and PDFs. So, storage is the obvious cost. S3 list pricing back then was
+roughly 2 cents per gigabyte per month for standard storage. Dropbox was certainly getting volume
+discounts, but even half at that rate, half an exabyte costs you somewhere in the range of $50
+million a year just for all of that data sitting still. And that's before you've moved any of that
+around. But, storage is just one line item. Let's look at what else you're paying for on a cloud
+bill at that scale. First, there's bandwidth. Dropbox is a product where every byte stored gets
+downloaded back eventually. That's egress traffic from AWS. Egress is one of the most expensive line
+items in any cloud bill. And this price was something like 9 cents per gigabyte out. And at
+Dropbox's scale, that's a separate huge cost on top of storage. Every put, get, and list against S3
+costs a fraction of a cent. At hundreds of millions of users doing file operations, those fractions
+add up to real money. The next cost is replication and durability. Now, AWS replicates your data
+internally for durability. And you pay for that replication implicitly through the storage cost.
+Next is you're paying AWS's margin on all of this. AWS is not running the data centers for free.
+They have to make money. And the cloud price includes their cost plus their margin. At small scale,
+that margin is invisible because you wouldn't have built all of this yourself anyway. But, at
+massive scale, that margin is a number you can put your finger on. Now, here's where the math gets
+interesting. Dropbox sat down and asked, "If we built our own storage infra at this scale, what
+would it cost?" The answer, roughly, was that at half an exabyte, building it yourself costs maybe
+half of what AWS charges. Maybe a third if you build it well. And the savings are not just the
+margins that AWS takes. They're also the redundancy you can do more efficiently because you know
+your specific workload. And the bandwidth you don't pay for because the data lives in your own data
+center. And the hardware optimization you can do because you control the whole stack. Now, the
+break-even calculation depends on a lot of things, but for Dropbox at their scale with their
+workload shape, the math said, "If we commit to building this for the long term, we save tens of
+millions of dollars a year forever. Plus, we get to optimize the stack for our specific access
+pattern." The decision was almost obvious once they ran the numbers. The catch is that math only
+works at scale. At 10 petabytes instead of 500, the math does not work. Now, the fixed costs of
+running data centers like staff, real estate, power contracts, network providers, those are huge,
+and you need enormous volume to amortize those costs. But, most companies will never reach that
+volume. And most companies should just keep paying the cloud margin and consider it the cost of not
+having to think about it. So, around 2014-15, Dropbox made the call. They were going to build their
+own storage infra. They called this the project Magic Pocket. And the moment you make this decision,
+you've just signed up for a generational engineering project. This isn't a side initiative. This
+isn't a quarter of work. This requires assembling a team, hiring dozens of system engineers,
+designing custom hardware, writing a new storage stack from scratch, building out data centers, and
+then migrating hundreds of petabytes of live user data without anyone noticing. Now, let's quantify
+what they were actually committing to. First, they needed to design and build new data centers or
+lease space in colocation facilities in multiple geographies. That's real estate. That's power.
+That's networking. That's redundant fiber to the public internet. Second, they needed custom
+hardware because off-the-shelf server hardware was not going to be cost-effective at the densities
+that they needed. They were going to design their own storage chassis, which was optimized for the
+specific access pattern of user file storage. Third, they needed a new storage system. Software-
+wise, S3 was doing a lot of work for them under the hood. Like erasure coding, replication,
+durability guarantees, the whole operations layer, they had to build all of that themselves. And
+fourth, they needed to migrate the existing data, which was half an exabyte. And this was going to
+be live in production while users continued to use the product. So, that means zero downtime, zero
+data loss over many, many months. And fifth was they needed to build the operations capability to
+run all of this themselves. Now, AWS handles things like hardware failures, network outages,
+capacity planning. Now, Dropbox's team would have to handle all of this. This is what people miss
+about build versus buy at this scale. The cost savings are real, but they're only available if you
+can execute on the build. If you start the project and bail out after 3 years, you've spent a
+fortune and got nothing. And if you build it, but it's unreliable, then you've made your product
+worse. The build only pays off if you can actually do it well. And doing it well at this scale
+required hiring a specific kind of systems engineering talent, which were people who had worked at
+Google, Facebook, Microsoft, and AWS itself. People who knew how to design large-scale storage
+systems. Now, the talent acquisition was a huge part of the bet. Dropbox spent years hiring people
+away from companies that had already solved similar problems. They poached engineers who had worked
+on Google storage systems, Facebook storage systems, and AWS's own storage systems. That talent base
+is what made the project feasible at all. So, the decision was not just should we move off AWS? The
+decision was do we believe that we can hire and retain a team that can execute a multi-year hardware
+and software project at hyperscalar That's a much harder question, and most companies should answer
+no to that. Okay, before we go any deeper, I want to take a few seconds to tell you about a cohort
+that I teach personally to 15 to 20 engineers every few months, and it's called the AlgoRock cohort.
+We cover advanced system design, architecture for the post-AI world, and usually the people who
+attend these cohorts are senior folks like SREs, platform engineers, principal engineers, enterprise
+solution architects, and VP engineering guys. And these are people all the way from 5 years to 26
+years of experience. And this is a great way to learn from actual production case studies. Now, the
+next upcoming cohort is going to be in July, and I want to go through the website www.algorock.io,
+which is algoroq.io, and go through the topics that we're going to cover. We'll cover modern systems
+like how Anthropic handles LLMs and how Hugging Face handles so many sandboxes for AI models, and
+how Together AI hosts so many open-source models at the same time. It's going to be a 12-weeks
+intensive program, and if you like the topics that we're going to cover, I want to hit the reserve
+or the enroll button and fill up the form that opens up when you hit this button. Once you fill up
+the form, I'll check to see if you're a great fit, and then we'll set up a call with you. The live
+cohort personally taught by me is about 25 $2,400, and if you want access to just the pre-recorded
+videos, that's $800. Now, if you're new to engineering and you're early in your career and you're
+beginning engineering right now, this cohort is not at all relevant for you, so please don't fill up
+the form. All right, now back to the video. Okay, so let's talk about what they actually built,
+because Magic Pocket is one of the most impressive engineering projects of the last decade. The
+high-level architecture of Magic Pocket looks something like this. At the top, you have the block
+storage layer, which is the API that the rest of the Dropbox's services talk to when they want to
+read or write file content. Below that, you have a sharded, replicated metadata layer that knows
+where every block of every file lives. Below that, you have the actual storage layer, which is racks
+and racks of custom-built storage servers, each holding tens of petabytes in multiple data centers
+around the country. The thing I want you to notice about this architecture is how separated the
+concerns are. The API layer does not know about hardware, the metadata layer does not know about
+placement strategy, the placement engine does not know about the actual physical machines. Each
+layer is replaceable, debuggable, and scalable on its own. That's not an accident, that's deliberate
+as the only way a system this complex stays maintainable. The most interesting technical decision
+inside Magic Pocket is how they handle durability. The default approach to durable storage is just
+replication, which is keep three copies of every byte. And if one disk dies, you have two more. And
+AWS S3 does something like this internally, but replication actually is wasteful because three
+copies means you're paying for three times the raw storage to get one usable copy. Dropbox uses
+something called as erasure coding instead, and specifically they use something called as Reed-
+Solomon erasure coding. Now, we will obviously have a video dedicated to Reed-Solomon erasure
+coding, but I just wanted you to know that these are the playlists where I keep these concept
+videos. So, there's a playlist called the ultimate system design for beginners playlist, and there's
+another one called the intermediate system design playlist. Both of these have quite a lot of
+videos. If you binge-watch both of these playlists, you will know system design better than 99% of
+the people on the planet. Anyway, let's get back to our video, and let's just understand erasure
+coding from a 10,000-ft perspective for our purpose right now in this video. So, the way this works
+is that you take a file and you break it into K data chunks. So, K is like the number of data chunks
+that you broke that file into. Then you compute M number of redundancy chunks based on those data
+chunks using some math. And that math function is not important for this video. Now, you distribute
+all the K plus M chunks across different machines, and now any K chunks, any combination are enough
+to reconstruct the original file. And you can lose up to M chunks before you lose the entire data.
+So the numbers Dropbox used were something like K is equal to six data chunks and M is equal to four
+parity chunks distributed across different storage zones. So they stored 10 chunks total for every
+six chunks of original data. That's about 1.67x storage overhead. And storage overhead is how much
+more information that you need to handle for each chunk or data. So with replication we saw that we
+were having to store three different copies, but here we're just storing 1.6 different copies. So
+it's 1.67x storage overhead. For a system holding hundreds of petabytes, the difference between 1.67
+and 3x overhead is hundreds of petabytes of hardware you don't have to buy. But like with every
+awesome technology or algorithm, there is a trade-off. And the trade-off is that erasure coding is
+computationally more expensive. So to reconstruct a missing chunk you have to do math on the
+surviving chunks. So you only use erasure coding for data that's read relatively rarely. And for hot
+data, which is data being read constantly, replication is sometimes still better because there's no
+decoding cost. And Dropbox actually tiers their storage so that the most accessed data uses faster,
+simpler storage. And the cold majority uses erasure coded storage with maximum density. And this is
+one of those decisions that's only available to you if you control the stack. If you're on S3,
+you're using whatever durability scheme AWS uses internally. You can't really choose. But by
+building their own system, Dropbox could pick the optimal scheme for their specific workload shape,
+which is mostly cold storage with predictable access patterns. And the savings from this one
+decision alone are enormous. Okay, now let's talk about the hardware itself because when you're
+storing exabytes of data, the cost of the storage medium itself, which is the physical disks,
+becomes the dominant line item. Everything else is secondary. So Dropbox looked at every option for
+getting more bytes per dollar out of physical hardware. And the standard answer for cheap mass
+storage is spinning disks. SSDs are faster, but way more expensive per gigabyte. So, for Dropbox's
+workload, which involves cold data, which is mostly written once and read rarely, for that
+specifically, spinning disks are the right answer. But, within spinning disks, there's a specific
+technology called SMR, which is shingled magnetic recording. And the way regular hard drives work is
+that each track on the disk is separated from neighboring tracks by a small gap. So, the right head
+can lay down magnetic information on one track without disturbing the next one. Whereas, SMR shrinks
+those gaps by overlapping the tracks slightly, like roof shingles. You can fit more tracks on the
+same physical platter, which means more capacity in the same drive. The catch with SMR is that
+overlapping tracks make random writes very painful. So, to write to one track, you have to rewrite
+all the overlapping tracks behind it. So, SMR is terrible for general purpose workloads where writes
+happen all over the disk. And it's only good for workloads that write data sequentially and rarely
+modify it, which is exactly Dropbox's workload. So, Dropbox designed their own storage chassis, they
+called it Discotech, packed with SMR drives, and they got something like 1.4 petabytes per chassis
+in a 4U rack mount form factor. The density was roughly double what off-the-shelf storage servers
+were doing at the time. And because their software stack was built around write-once, read-many
+access, the SMR limitations did not hurt them. And this is what I mean when I say the workload shape
+matters more than the workload size because SMR is unavailable to most workloads because most
+workloads have random writes. Dropbox's workload is fundamentally sequential. That meant they could
+use a hardware technology that lets them store almost double the bytes per dollar of capacity.
+That's not a small optimization. That's billions of dollars over the life of the system. And again,
+this kind of optimization is only available to you if you control the whole stack. AWS uses general-
+purpose storage hardware because they have to support every workload, but by specializing, Dropbox
+got to make hardware choices that AWS structurally cannot. Okay, so they had the math on their side.
+They had the architecture ready. They had the hardware. Now, they had to do the hardest part, which
+is move all the data without breaking the product. And migrating data is a silent killer of
+infrastructure projects. The architecture diagram is actually easy. The hardware spec is easy, but
+moving live data while users are reading and writing to it without anyone noticing, that's where
+projects go to die. And Dropbox spent about 2.5 years doing this migration. From 2015 to 2017, they
+slowly shifted user data from S3 onto Magic Pocket, which is several hundred petabytes. And while
+the product continued to grow at the rate of about a petabyte per day of new data. And the pattern
+they used is the canonical playbook now for the same kind of migration, and it's worth knowing
+because the same pattern applies to any data store migration. So, the phase one for this is
+something called as dual writing, where every new write that comes in goes to both the old system
+and the new system in parallel. So, from the moment dual writing starts, no new data is only on the
+old system. The new system is actually catching up in real time. If something is wrong with the new
+system, you haven't lost any data because the old system is still the source of truth. Phase two is
+dual reading. You start reading from both systems and comparing the results. The user gets the
+result from the old system, but you do a shadow read from the new system and check that it matches.
+This is how you verify correctness at scale. You'll find bugs you'd never have found otherwise, like
+edge cases in your new system that only show up on real production traffic. And phase three is the
+backfill. All the data that was written before you started dual writing, that data only exists on
+the old system. You have to copy it across. And for Dropbox, this was hundreds of petabytes. They
+wrote dedicated migration jobs to scan S3 systematically and pull the data into magic pocket. This
+took months of background work running 24/7 while the product continued to operate. And phase four
+is the cutover. Once all the data is in the new system and you've verified correct test through dual
+reads, you flip the switch. Reads start coming from the new system as primary and the old system
+becomes the backup. If anything goes wrong, you can flip back. And after a few weeks of stability,
+you stop dual writing and finally retire the old system. The reason this is hard isn't the
+architecture of the migration. The architecture is well understood. The hard part is the discipline
+of going through every phase, finding every edge case, never cutting corners under deadline
+pressure. And the teams that fail at migrations usually fail because they tried to skip phase two or
+rushed past phase three. Dropbox went through every phase carefully because they understood that the
+alternative was data loss or downtime affecting millions of paying users, which was unacceptable.
+So, here's the most interesting part. Dropbox didn't actually leave AWS. They moved their storage
+workload off AWS, but they kept using AWS for a lot of other things. And in 2022, they actually
+expanded their AWS usage. And here's what they did. The storage workload, which was the dominant
+cost driver, is what they own now and that's where the math justified the build. But for new
+geographic regions, like when they expanded into Europe, they used AWS infra because spinning up a
+whole new data center for a single region did not make sense. And the volume in any region was not
+enough to justify the fixed cost of running their own infra there. And for workloads that are not
+storage, like metadata services, search indexes, processing pipelines, ML training, they use a mix.
+Some of it runs on their own infra, some of it runs on AWS. The decision is made per workload based
+on the same kind of analysis they did originally, which is how big is it, how steady is it, how
+specialized is it. So, the build versus buy decision it's not a single decision. It's a thousand
+small decisions made workload by workload over the lifetime of your company. And the answer for your
+storage might be build, and the answer for your compute might be buy. And the answer for your
+machine learning might be buy now, build later. There's no single right answer for the entire
+company. There's only the right answer for each of the workloads. The mature version of this
+thinking is that we own what we're so good at that owning it gives us a competitive advantage, and
+we rent everything else. For Dropbox, storage is a competitive advantage. They store more bytes per
+dollar than anyone else, and that lets them offer better pricing or better margins than competitors.
+But for most companies, storage is not a competitive advantage. It's just an expense. So, they just
+rent it. Okay, so let's see some of the lessons that you can take away from this video. So, there
+are five things. First is that workload shape matters more than workload size. And the size of your
+workload tells you how much you're spending, but the shape of your workload, which means how steady
+it is, how predictable it is, how specialized the access patterns are, tells you what your options
+are. A 100 petabyte workload that's mostly cold storage with predictable growth is a completely
+different beast from a 10 petabyte workload with bursty random access. The first one is potentially
+worth building. The second one is almost certainly worth buying. When you analyze a workload for
+build versus buy, look at the access patterns first. The second is the cloud charges you for
+elasticity, and that's the deal. You get to spin up capacity instantly and scale down to zero, but
+the price you pay for that flexibility is baked into every gigabyte and every API call. So, for
+workloads that are bursty, unpredictable, or seasonal, that elasticity is worth every penny. But for
+workloads that are steady, predictable, and always-on, you're paying for something you don't need.
+So, you have to recognize when your workload doesn't actually need elasticity, and that's the moment
+you can start asking the question that Dropbox asked. The third is that build versus buy is not a
+company-wide decision. It's a workload by workload decision. The dumbest version of cloud strategy
+is that we're are AWS company or we're moving off AWS, but the smart version is for each workload we
+evaluate whether the cloud's pricing makes sense for that specific S pattern. That evaluation has to
+happen continuously because workloads change over time. A workload that should have been in the
+cloud 3 years ago might be ready to move on prem today or vice versa. Treat this as an ongoing
+analysis, not a one-time decision. Fourth is migrations are varying infrastructure projects go to
+die. Dropbox spent 2.5 years migrating their data. They did not lose data. They did not have
+downtime. They did not burn their own team. That outcome was not an accident. It was a result of
+disciplined adherence to the dual write, dual read, backfill, cutover pattern. Most teams
+underestimate the migration phase of any infrastructure change. They budget for the new system, but
+not the transition. The new system is a finite engineering problem with a clear end. The migration
+is an open-ended disciplined problem that requires patience for months or years. Budget for it
+accordingly. Fifth is that owning the stack unlocks optimizations that cloud providers cannot give
+you. AWS's storage uses general-purpose hardware because they have to support every workload. They
+cannot use SMR drives because most workloads can't tolerate SMR's limitations. By controlling their
+own stack, Dropbox could pick the storage technology that fits their specific workload. They get to
+use SMR. They get to use erasure coding with their own parameters. They get to tune everything for
+their specific pattern. These are real efficiency gains that you literally cannot buy from a cloud
+provider because the cloud provider has to be general-purpose. If your workload is specialized
+enough and large enough, the value of these optimizations can be the entire justification for owning
+the stack. Okay, let's wrap this up. Now, Dropbox moved away from AWS for storage because their
+specific workload, which is exabytes of cold editable user file data, was paying a tax to the cloud
+that didn't make sense at their scale. So, they built Magic Pocket, designed customer hardware, used
+storage technologies most companies can't use, and executed a 2.5-year year without losing a bite
+and saved tens of millions of dollars a year forever. The lesson is not to leave the cloud. The
+lesson is the cloud charges you for elasticity. And at certain workload shapes and sizes, you're
+paying for elasticity that you don't need. And recognizing that moment requires understanding your
+own workload deeply. Now, most companies will never reach that point for any of their workloads.
+Some companies will reach it for one or two specific workloads while continuing to use the cloud for
+everything else. And the mature answer is that almost always it's both. The deeper lesson is that
+infrastructure decisions are workload by workload, not company-wide. So, your job as a senior
+engineer is to look at each workload, understand its shape, and decide what's appropriate for it.
+The dogmatic answer is everything runs in the cloud or we run our own metal. And these answers are
+almost always wrong. The right answer is specific, considered, and often boring. When you face a
+decision for a workload near own system, the question to ask is, am I in a Dropbox-like zone for
+this workload, which is massive, steady, and specialized? If yes, build could be on the table. If
+no, then buy is almost certainly right. Now, making these deep dive videos takes a lot of work and
+takes a lot of work to build those diagrams. So, please don't forget to subscribe. Please don't
+forget to share this video, like this video, and comment on this video if you have any questions,
+and I'll see you in the next video.

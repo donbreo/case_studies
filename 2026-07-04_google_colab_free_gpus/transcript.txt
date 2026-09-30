@@ -1,0 +1,322 @@
+Now millions of people open a browser tab, enter code into notepad, and click the " Run" button.
+This code is not running on their laptop, but on this infrastructure, often with access to a GPU
+that Google pays for. And the code can be anything. It can train a neural network, it can try to
+delete the entire file system, it can scan the network, overload the processor, or probe the
+operating system for vulnerabilities. Google does not check this code in advance. The users are
+complete strangers, yet they are allowed to run arbitrary programs on Google's own hardware every
+day , and somehow it all works. Users can't interfere with each other, the platform doesn't collapse
+due to abuse, and Google didn't go bankrupt by giving away free computing. This is Google Colab . At
+first glance, it looks like a friendly notepad environment used by students, researchers, and
+developers. But deep down, there is a surprisingly complex systemic problem. How do you safely allow
+millions of untrusted strangers to run whatever code they want on your infrastructure, while still
+controlling both security and economics? Interestingly, the solution isn't some giant pile of
+security tools glued together. It's actually a small set of design principles applied consistently.
+In this video, we'll look at how Colab isolates untrusted code, how it gives away expensive GPU
+resources without destroying the economy , and several architectural patterns that can be applied to
+any multi-user platform. Much of what we'll cover in this video is taken from publicly written
+Google articles about gVisor, the technology that, in a sense, enables all of this. I took all the
+publicly available information and formed it into charts. So this video is going to be very visual.
+Be sure to watch until the end to understand how Google Colab actually works . Google Colab treats
+each coding session as a disposable sandbox for garbage, and this single solution solves both of
+Colab's complex problems at once. Take, for example, the security problem of using untrusted code.
+Now, if each session is a separate, locked sandbox that gets erased in a matter of minutes, then the
+worst thing a user can do is sit here, locked in a box that's about to be destroyed anyway. If the
+machine is disposable, you can take it back as soon as someone stops using it and pass it on to the
+next person. So, it's one pool of equipment that is endlessly recycled. Almost every quirk of Colab
+stems directly from this one decision. Why your variables disappear, why your runtime shuts down,
+why you reinstall packages every session, why a long training task completes, all of it. So let's
+build it from the bottom up . Essentially, Colab is a hosted version of something called Jupiter. So
+let me quickly explain Jupiter, because everything is on it. A Jupiter notebook is simply a document
+made up of cells. Some cells are text, some are code. You write a bit of Python in a cell, run it,
+and the result is displayed right below it. A number, a chart, a table, whatever. And then you write
+in the next cell. It's a natural way to work with data because you build something piece by piece
+and see each step in the process. The notebook itself with cells, text, code is just a file , but
+something has to actually run the code. And Jupiter, this is something called a core. The kernel is
+a live process that keeps your session in memory. And when you run a cell, the code goes to the
+kernel, and the kernel executes it, remembers any variables you created, and sends the result back.
+Colab calls this a runtime environment, and we 'll call it that here as well, so as not to get
+confused later when I start talking about a different type of kernel. This is what Colab Colab does.
+This runtime doesn't run on your computer, it runs on Google servers. So you open a browser tab, and
+the code you type is executed on a machine in a Google data center on Google processors and Google
+GPUs. You only bring a browser. So, Colab actually consists of two halves, and they are in
+completely different places. The first half is the frontend, the part you actually look at. This is
+a notepad interface that runs in your browser and is brought to you by Google. This is where you
+type, where you see your results, and where you click "Run ." The other half is the runtime , a
+machine located in a Google data center that actually does the real work. And there is an active,
+always open connection between them. So, when you run a cell, your browser sends this code over a
+connection to the runtime . The runtime executes it, and the results— text, images, and errors—are
+sent back over the same connection, and your browser displays them on the page. It is this open
+connection that creates the impression of immediacy. You click Run and the answer just appears
+because there 's already an open line to the machine sitting there, ready to be used. This also
+explains the message you definitely saw when using Google Colab, which is: "Your runtime has been
+disabled." Well, it's not a website crash. It's actually the other half, that is, the machine itself
+that your code runs on, that disappears. So, the browser is working fine. This is the computer at
+the far end that just disappeared. And why it disappears is what the rest of this video is about.
+The field where you enter the code will run whatever you type there. There is no approval stage. On
+a regular shared server, this is the worst case scenario you plan against. One attacker on a shared
+server can completely disable the system or stealthily take it over and use it to reach everyone
+else on it. So, the question that Colab constantly answers is: how do you run completely untrusted
+code from third parties on your own hardware and be sure that the worst case remains contained?
+Let's first look at the obvious answers and consider why they don't hold up. The first thing most
+engineers turn to is the container. You've probably used Docker. A container packages an application
+so it runs in its own isolated bubble, with its own files, its own processes, its own view of the
+world. From the inside, it looks as if the program has the entire machine at its disposal . But
+there is one trick, and it is important. All of these containers on a machine have one thing in
+common –the operating system kernel. And the kernel is the core of the operating system, the part
+that actually manages the hardware, i.e. the disk, memory, network card, and processor. Your program
+can't directly touch any of this, and every time the program wants to do something real, like open a
+file, send a network packet, and request more memory, it has to ask the kernel to do it. The program
+is effectively locked in a room. The only way it can affect the outside world is to slip a request
+note under the door to the kernel, which reads the note and decides whether to act on it or not.
+These requests have a name , and they are called system calls, or system calls for short . Remember
+this word, because it will be remembered much later. Now here's why containers are not enough for
+untrusted code. Every container on the machine pushes records under the same door to the same
+kernel, and that kernel is one common guard for everyone on the machine. So if malware finds one bug
+in the kernel, one flaw in the way it reads a particular node, it can trick the guard, break out of
+its room, and suddenly it's no longer isolated. She stands in a hallway with access to the entire
+building, every other container, everyone's data. This is called container egress, and for untrusted
+code, it's not hypothetical, it's actually a common class of attack. So containers are good for your
+own code, code you trust, but for outsiders, one common core is that it's too thin a wall. So the
+next natural thought is: don't share the kernel, give each user their own full virtual machine. A
+virtual machine is an entire simulated computer running on top of a real one, with its own full-
+fledged operating system and its own kernel inside. Now there is no shared protection, each user
+gets their own building, their own security, completely separate from everyone else. This is the
+gold standard of insulation. Now, to break out, an attacker would have to escape the entire
+operating system, and then the hardware-imitation layer underneath it. But virtual machines are
+heavy, each one has to load a full operating system, and each one reserves a large chunk of memory
+and CPU just to exist before doing any of your actual work, and deploying one of them takes real
+time. Now imagine doing this for millions of people, most of whom open a laptop, run a few cells for
+10 minutes, and leave. You would have to constantly download and disassemble full operating systems
+and back up mountains of hardware that is mostly idle . At the scale of Colab, and at the price of
+free, this math simply doesn't work. So, that's the problem. Containers are cheap, but too weak for
+unreliable code. Full-fledged virtual machines are powerful, but too expensive to give away for free
+at this scale. What Colab needs is what isn't on this menu. Virtual machine level isolation at the
+price of a container level. And that's exactly what Google created. The answer is a technology
+called gVisor. Google created it specifically for this problem, safely running untrusted code, and
+Google runs every session inside it. It's an open source program, the code is right in front of you,
+you can read it, and the basic idea is quite simple once you understand it. Remember the container
+problem? Untrusted code passes its system call notes directly to the one real kernel, and one bug in
+that kernel means everything is at stake. So what if the untrusted code didn't communicate with the
+real kernel at all? What if you put a second core between them, a substitute that catches each note
+first? That's what gVisor is. This is what is called the kernel of the program, and it runs like a
+regular program in regular user space, not in a real operating system. And the part that does this
+job is called a sentry. Sentry itself is a core. It reimagines much of Linux's behavior, but is
+written in Go, a memory-safe language chosen precisely because entire categories of classic security
+bugs are much harder to write in it. So now the unreliable code is locked in its room, slipping
+notes under the door, only on the other side of the door is no longer the real core. This is the
+sentinel, the second core that stands in the way. So, here's what exactly happens when your code
+makes a system call. Typically, a program makes a system call, it goes directly to the host kernel,
+and the host kernel executes it. One jump, and a direct connection to the most powerful, most
+sensitive parts of the software on the machine. But with gVisor, things are different. The program
+makes a system call, and gVisor intercepts it before it reaches the real kernel. It passes the call
+to the watchdog, and the watchdog handles it itself in user space , emulating what a real kernel
+would do. Untrusted code thinks it is communicating with Linux, but it is not. He simply
+communicates with a careful re-implementation that watches every step. And here is the key
+consequence. The actual host kernel, the de facto guardian of the entire machine, hears almost no
+untrusted code. Almost everything is absorbed and processed by the sentinel. The real kernel sees
+only a small, fixed, carefully vetted set of ins- requests coming from gVisor itself, not the broad
+stream of system calls generated by user code. So you've taken the huge attack surface of anything a
+program can ask the kernel for and reduced it to one narrow control channel. Now a quick note for
+those wondering how it actually intercepts calls: gVisor does this either through a Linux feature
+called seccomp, which allows it to intercept system calls, or through hardware virtualization. In
+any case, the essence is the same . Nothing that the user code requests reaches the real kernel
+directly. All of this is intercepted at the door. Now let's talk about why this provides isolation
+that is close to a full virtual machine, but at a much lower cost. Think about what the attacker
+would have to do now to actually break out and get to the host machine. First, they need to find and
+exploit a bug in sentry, the gVisor core. Let's assume they succeeded. Now they are inside gVisor,
+but gVisor itself is a locked down unprivileged program. It doesn't just protect the host from code.
+It also isolates the host using the same Linux isolation features and drops almost all of its own
+privileges before any of your code even starts executing. So, after cracking sentry, the attacker
+still has to separately find and exploit a bug in the real host kernel. And here's the key part.
+These two kernels, sentry and host kernel, have no common code at all. They are completely
+independent implementations. So, a mistake in one is not a mistake in the other. You are not asking
+an attacker to break one lock. You're asking him to pick two completely different locks one after
+the other, where the key to one tells you nothing about the other. This is a much higher bar than a
+single shared core of a simple container. So, here is a clean version of the entire security system.
+Untrusted code never touches the real kernel. He touches the second core that stands in his way, and
+breaking it means defeating two unrelated cores in a row. Now, all this interception is not free.
+Recycling every system call has overhead, and it's interesting what that overhead goes towards. They
+are almost entirely spent on the heavy lifting of system calls, things that constantly overload the
+disk or network, such as databases or load balancers. For them, gVisor can cost you a significant
+performance loss, on the order of 10-30%. But look at what Colab users actually do. They train
+neural networks, multiply huge matrices, and run number processing cycles on a GPU . Such work is
+limited by computing resources. Once it starts, it spends almost all of its time performing raw
+mathematical calculations on the processor and interacts almost completely with the operating system
+. It makes very few system calls in its hot loop. So the only thing Gvisor attacks is system calls,
+which the Colab workload barely does, meaning that the sandbox , which would be painfully slow for
+the database, is almost free for machine learning. And besides, the work on the GPU is performed
+directly on the real accelerator at full speed. The sandbox is around the code, not in the middle of
+number processing. This is a case where what the workload actually does is much more important than
+any benchmark. The same tool is a bad choice for one type of system and perfect for another. Colab
+just has exactly the kind of workload where heavy isolation costs next to nothing. They get virtual
+machine-like security and pay almost nothing for it solely because of what their users use. Now,
+before we dive in, I want to take a few seconds to tell you about a cohort that I host every few
+months, and it's called the " Alchemist Cohort." We cover advanced systems design, architecture for
+the post-AI world, and usually the people who attend are senior people like SREs, platform
+engineers, principal engineers, enterprise and solution architects, and we join the guys. So, there
+are people with experience ranging from 5 to 26 years, and it's a great way to learn from real-world
+production examples. Now you can go to the algorok.io website, which is algorok.io, and check out
+the topics we're going to cover in this cohort. Now we'll look at modern systems, like how Anthropic
+handles LLM, and how Hugging Face handles so many sandboxes for AI models , and how AI together
+hosts so many open source models at large scale. This is a 12-week program. Each session is a 4-
+hour deep dive. Now, if you like the themes, I want you to fill out the form that opens when you
+click the "Reserve" or " Register" button at the top of the website. And once you fill out the form,
+we'll check if you're a good fit and we'll arrange a call with you. Right now, a live course that I
+personally teach costs about $2,400, but there is a huge waiting list because I can only take a few
+people. But if you just want access to pre-recorded sessions, you can get immediate access for just
+$800. So, if you are currently at the beginning of your career and starting out in engineering, this
+cohort may not be of interest to you. So please don't fill out the form. Good. Now let's get back to
+the video. Good. So, that's half of the design. The sandbox contains the bad actor in a space,
+isolating him from the machine and everyone else. Here is the other half. It contains them in time.
+Each Colab runtime is a new machine built from a clean base image. You log in and get a completely
+new environment, identical to the one everyone else starts with. You work in it, and then when you
+log out, when you go into standby, or when you reach the time limit, that machine is deleted. It is
+not paused, but deleted and returned to its original state, ready for the next person. Google even
+gives you a button for this, Disable and Remove Runtime Environment , which throws out your machine
+and resets it to factory settings. And this tax, sitting right on top of the sandbox, G Visor,
+already makes it very difficult for anything bad to get out of it. But let's assume that something
+nasty really managed to corrupt the environment , install something malicious, corrupt some files;
+it almost does n't matter because this whole machine only exists for a few hours at most, and then
+it's destroyed and rebuilt from a clean image, so nothing the user does survives. So, the explosion
+radius is not only small in space, but also small in time. There is nothing durable that an attacker
+could gain a foothold on, because nothing is durable. And this same disposability is also the only
+reason why Colab can be free. Security design and cost design turn out to be the same. GPUs are
+expensive and in limited supply. There's no way Google could give each of its millions of users
+their own dedicated GPU reserved for them. Most of these GPUs would be idle most of the time while
+someone was looking at their screen and thinking. It would cost a fortune and almost all of it would
+be wasted . So, the only way the free tier works is to treat the entire GPU fleet as one shared pool
+that is constantly being recycled. You get the GPU while you're actively using it, and as soon as
+you stop, as soon as your runtime goes to standby, it's returned and handed off to the next person
+in the queue. You can imagine a library with a limited number of copies of a book. You get the book
+while you read it. As soon as you put it away, it goes back on the shelf for someone else. This is
+why the runtime is deleted when it's idle after about an hour and a half of not being touched by you
+, and this is why there's a hard ceiling, somewhere around 12 hours on the free tier, after which
+even an active session is recycled. It seems to people that their long training is over overnight,
+but this is not a mistake , it is a rationing. A mechanism that allows a limited number of GPUs to
+be distributed among a huge number of users. Without aggressive recovery, free Colab simply could
+not exist. So, if GPUs are a shared pool that needs to be rationed, then the most important
+engineering element in the entire system is not the notepad editor, but the scheduler. The one who
+decides who will receive the calculation, how much, and for what period. Google is pretty open about
+how it thinks here, even if it won't show you the exact details. There are two main principles.
+First, they prioritize people who are actively programming in Notepad. Colab exists for them, for
+example, for students, researchers, people who learn and create interactively. If you're sitting
+there, writing and running cells, you're exactly the user they want to serve. Second, they are
+cracking down heavily on abuse of free computing, and they are quite specific about it. So you're
+not allowed to use the runtime as a remote server that you connect to via SSH, and they don't want
+you to run it as a remote desktop, and don't run it as an always-on web service instead of a
+notepad. So, no file hosting, no torrents, and definitely no crypto mining. All of this requires
+computing resources, and none of this is interactive coding, which they subsidize and limit or shut
+down. Also under it is a deliberately secret abuse detection system . Google categorically states
+that it doesn't explain how it works because as soon as they do, people will start cheating it.
+Attackers are constantly trying to exploit free GPUs en masse. So the free tier has no guarantees.
+Resources fluctuate and you get a GPU when one happens to be unavailable. This uncertainty that you
+experience as a user is a planner doing its job, constantly deciding in real time how to distribute
+a scarce, expensive resource among millions of people as fairly and cheaply as possible. At this
+scale, this distribution policy is a product that brings us to the obvious question: if it's costing
+Google real money, how does it all stay afloat? The answer is paid levels. They do two jobs at the
+same time. There is Colab Pro and Pro Plus. There is pay-per- use, where you buy compute units and
+spend them as you work. There is a more powerful Colab Enterprise that is inside Google Cloud for
+businesses. So when you pay, you move to the front line. This means priority access, better and more
+reliable GPUs, and serious accelerators instead of free entry-level ones. You get longer runtime and
+the ability to continue working in the background. And pay attention to what the paid tier does for
+the system as a whole. It cross-subsidizes free users. Money from paying customers helps fund free
+computing, and just as importantly, it gives heavy users a proper workout. Someone who wants to
+train a model for 2 days in a row or run a real workload is exactly the type of usage that will
+deplete the free pool. So, the paid tier pulls them out of the free pool for the calculations they
+pay for. And it's the same logic for every workload that you see everywhere good infrastructure is
+built . Free and best efforts for light interactive cases, paid and guaranteed for the moment you
+need some reassurance. So, the free tier is actually a sales funnel and a goodwill game. Attract
+millions of students and researchers to the simplest notebook, and some of them and their companies
+will become paying customers. Okay, now I want to focus on one detail that explains almost all the
+complexities of using Colab. There are two completely separate things in Colab, and people
+constantly confuse them: the notebook and the runtime. Notepad is your .ipynb file, it's just a text
+file, actually JSON, that contains your cells, your code, and any saved results, and it's in your
+Google Drive. It's durable, it's stored, it's synced, and you can share it, and you can close your
+laptop and it'll still be there tomorrow. Think of it as your recipe written down on paper. While
+the runtime is the one-time machine we talked about, it stores your active state, the variables that
+are currently in memory , the libraries that you have installed for that session, the files that you
+have loaded onto it, and it is ephemeral, it gets erased. Think of it as a kitchen that you borrow
+to prepare a recipe, clean completely, and hand over to the next cook when you leave. Once you see
+this division, everything will become clear. Your code text is never in danger because it's a recipe
+on Drive, but your working state, your variables, your loaded state, and your semi-trained model in
+memory are in a borrowed kitchen. They disappear the moment the runtime terminates. And that's why
+when you reconnect after disconnecting, your variables are empty and you have to start everything
+over, but you never actually use your notebook. So these are two different things, two completely
+different service lives. And that's why , if you used Colab for anything real, you would type pip
+install and the library name at the top of the notebook over and over again for each session for the
+same library. It annoys people, but now you know exactly why it happens. The runtime is a new
+machine from a clean base image every time. Everything you installed last session, everything you
+uploaded to your working folder, went into the borrowed kitchen, and the kitchen was erased. So it's
+a new session, a new kitchen, and none of your old existing stuff is there anymore. Now Google is
+doing one smart thing to alleviate this problem. The base image that every runtime starts with
+already comes with heavy machine learning tools pre-installed. Large frameworks, GPU drivers, and
+data libraries. And this is intentional. They pre- build the necessary things into the image , so a
+disposable machine built from scratch is still ready to go the moment you plug it in, instead of
+forcing you to install gigabytes before you can do anything. And for data you really want to save,
+like your datasets, saved models, and logs, you can actually connect your Google Drive to the
+runtime . So, durable things are on the Disk, and disposable things are on the machine, which is
+again the same lesson. Keep things you can't afford to lose separate from the car you're about to
+throw away. Now here's something subtle that most people never think about, and it shows how
+seriously Google takes untrusted code. We were worried about the code the runtime executes , but
+Notepad can also produce rich output. It can render HTML, run JavaScript, and draw interactive
+widgets right on your page. And this output also comes from an unreliable notebook . A malicious
+notebook might try to create malicious JavaScript that runs in your browser inside a Colab tab , and
+try to interfere with your session or collect your credentials. So Colab applies the same instinct
+on the browser side as it does on the server side. He isolates an unreliable thing. Rich outputs are
+displayed inside a sandboxed iframe, served from another web source, a completely separate domain,
+separate from the main Colab application . So, even if the notebook generates malicious code, that
+code is packaged into its own frame on another source and cannot get into your actual Colab session.
+The problem with untrusted code is that it doesn't stay clean on the server. It is carried along
+with the outputs all the way to your browser, and Colab packages it there as well . So the same idea
+is implemented here. So, let's put it all together, following one cell from the moment the "Run"
+button was pressed . This is the entire system in one image. You enter the code and press shift +
+enter. The frontend in your browser sends this code over an open connection to your runtime. This
+runtime is a machine in a Google data center, privately hosted only by you, built from a clean base
+image wrapped in the gVisor sandbox, with, if you're lucky, a GPU attached. Your code starts
+executing . Every system call it makes is intercepted by gVisor and handled by the sentry service,
+so it never touches the real kernel, and the heavy method runs on the GPU at full speed. The results
+are sent back over the connection and your browser renders them, and if it's rich output, it renders
+them in a sandbox frame on a separate source. Meanwhile, your notebook is automatically saved to
+Drive, so your work is safe, and as soon as you're idle long enough, that whole machine, the
+sandbox, the GPU, your variables—everything comes back, gets erased, and passed on to the next
+person in line. And that's Colab, a disposable private sandbox machine that runs for you on demand,
+safely running your untrusted code and rolling back as soon as you're done. Every part of it, from
+the very beginning, serves these two words: disposable and isolated. Now let's talk about
+compromises. For you, the user, the one-time thing that gives you security and free GPUs is the same
+thing that causes all the frustration. There are no guarantees, sometimes there is no GPU for you at
+all , you get unexpected shutdowns, you lose your state when the runtime terminates , and long
+training jobs stop after an hour and a half of downtime, and because of the 12- hour ceiling you
+can't reliably run a multi-day training run on free Colab, and this is not an oversight, this rate-
+setting works properly. And it's not free for Google either. There is a sandbox tax because they
+have to do real engineering to create and maintain a whole second core. And there's a constant game
+of cat and mouse against people trying to farm free GPUs, so there's a secret system of abuse that
+they have to constantly develop. There is a serious operational burden of scheduling a limited,
+expensive accelerator pool for millions of people in real time. And underneath all this, they are
+literally handing out real money for calculations as a bet. And the bet is that the goodwill,
+thought-sharing, and sales funnel going to paid tiers and Google Cloud are actually worth it. Many
+people go in thinking it 's free GPUs and some kind of gimmick, but in reality it's a carefully
+crafted , intentionally subsidized loss leader that relies on a sandbox, a ruthless scheduler, and a
+paid tier that actually pays the rest of the bill. Okay, let's look at some lessons you can take to
+your own systems design. First, make the unit of work disposable. What makes Colab effective is that
+a session is a one-time thing, and one-time things are great for two reasons at once. They are safe
+because the blast radius of anything that goes wrong is small and short-lived, and they are cheap
+because you can instantly return and recycle them. Second, match the isolation to your threat model
+and pay for exactly the isolation you need. Simple containers for code you trust, and full virtual
+machines for when you're too deeply paranoid and cost doesn't matter. And something like Gvisor is
+designed for the middle ground, where strong isolation without the full weight of a virtual machine
+doesn't matter. Third, the right amount of overhead depends on what your workload actually does, not
+on a benchmark. Gvisor's system call tax is brutal on the database and almost free on the neural
+network, which is the same tool, has the opposite verdict solely due to the access pattern. Fourth,
+separate the durable from the disposable. The laptop is forever lying on the disk , the runtime
+environment disappears in a matter of minutes. Most systems sloppily combine something you should
+never lose with something you can always rebuild from scratch. Fifth, on a large scale, the planner
+is a product. Giving away free GPUs is not generosity, it's a rationing mechanism. So, you
+prioritize the users you created for. So, you aggressively reclaim your free capacity and reduce
+abuse. And you're cross- subsidizing the free tier from people who are actually paying. So, here is
+a question you can consider for any of your systems. What in my system can I make disposable, and
+what is the cheapest isolation that covers my threat model? Do these two steps correctly and you
+will be able to do what seemed impossible at the beginning of this video. You can let outsiders run
+code on your machines and sleep peacefully. Reading and researching all this information and turning
+it into diagrams for these deep dive videos takes up a lot of my time and effort, especially after
+my full-time job. So please don't forget to subscribe to this channel, like and share this video,
+and see you in the next video.

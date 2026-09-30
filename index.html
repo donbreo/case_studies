@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="theme-color" content="#eff5f1">
+	<title>Case Studies | Fieldnotes</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap" rel="stylesheet">
+	<style>
+		:root {
+			color-scheme: light;
+			--paper: #f4f7f3;
+			--surface: #ffffff;
+			--ink: #182a25;
+			--muted: #61716b;
+			--line: #dce5df;
+			--green: #176b55;
+			--green-soft: #e1f0e9;
+			--red: #c55338;
+			--code: #edf3ef;
+			--shadow: 0 14px 40px rgb(25 55 43 / 8%);
+		}
+
+		* { box-sizing: border-box; }
+
+		body {
+			margin: 0;
+			background: var(--paper);
+			color: var(--ink);
+			font-family: "DM Sans", sans-serif;
+			font-size: 15px;
+			line-height: 1.65;
+		}
+
+		a { color: var(--green); }
+		button, input { font: inherit; }
+
+		.shell {
+			min-height: 100vh;
+			display: grid;
+			grid-template-columns: 292px minmax(0, 1fr);
+		}
+
+		.sidebar {
+			position: sticky;
+			top: 0;
+			height: 100vh;
+			overflow-y: auto;
+			padding: 28px 20px 24px;
+			background: var(--surface);
+			border-right: 1px solid var(--line);
+		}
+
+		.brand {
+			display: flex;
+			align-items: center;
+			gap: 11px;
+			padding: 0 5px 25px;
+			border-bottom: 1px solid var(--line);
+		}
+
+		.brand-mark {
+			width: 34px;
+			height: 34px;
+			display: grid;
+			place-items: center;
+			background: var(--green);
+			color: white;
+			font-family: "Newsreader", serif;
+			font-size: 22px;
+			line-height: 1;
+			border-radius: 3px;
+		}
+
+		.brand-name { font-size: 15px; font-weight: 700; letter-spacing: 0; }
+		.brand-caption { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+
+		.search-wrap { position: relative; margin: 23px 0 26px; }
+		.search-wrap::before {
+			content: "";
+			position: absolute;
+			left: 13px;
+			top: 13px;
+			width: 11px;
+			height: 11px;
+			border: 1.5px solid var(--muted);
+			border-radius: 50%;
+		}
+		.search-wrap::after {
+			content: "";
+			position: absolute;
+			left: 24px;
+			top: 25px;
+			width: 6px;
+			height: 1.5px;
+			background: var(--muted);
+			transform: rotate(45deg);
+			transform-origin: left center;
+		}
+
+		#search {
+			width: 100%;
+			min-height: 40px;
+			padding: 8px 12px 8px 39px;
+			color: var(--ink);
+			background: var(--paper);
+			border: 1px solid var(--line);
+			border-radius: 3px;
+			outline: none;
+		}
+		#search:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgb(23 107 85 / 12%); }
+
+		.nav-label {
+			margin: 0 8px 10px;
+			color: var(--muted);
+			font-size: 11px;
+			font-weight: 700;
+			letter-spacing: .1em;
+			text-transform: uppercase;
+		}
+
+		.study-list { display: grid; gap: 20px; }
+		.study-group + .study-group { padding-top: 17px; border-top: 1px solid var(--line); }
+		.group-title { margin: 0 8px 7px; color: var(--muted); font-size: 12px; font-weight: 600; }
+
+		.doc-link {
+			width: 100%;
+			display: block;
+			padding: 9px 10px 9px 12px;
+			color: var(--ink);
+			text-align: left;
+			background: transparent;
+			border: 0;
+			border-left: 2px solid transparent;
+			cursor: pointer;
+		}
+		.doc-link:hover { background: var(--paper); }
+		.doc-link[aria-current="page"] {
+			color: var(--green);
+			background: var(--green-soft);
+			border-left-color: var(--green);
+		}
+		.doc-title { display: block; font-size: 13px; font-weight: 600; line-height: 1.4; }
+		.doc-kind { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+		.empty-search { padding: 8px; color: var(--muted); font-size: 13px; }
+
+		.main { min-width: 0; }
+		.topbar {
+			min-height: 66px;
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 16px;
+			padding: 12px clamp(22px, 5vw, 72px);
+			border-bottom: 1px solid var(--line);
+		}
+		.crumb { color: var(--muted); font-size: 12px; }
+		.topbar-note { color: var(--muted); font-size: 12px; }
+
+		.reader {
+			width: min(100%, 1020px);
+			margin: 0 auto;
+			padding: 48px clamp(22px, 6vw, 84px) 96px;
+		}
+
+		.doc-header { padding-bottom: 25px; border-bottom: 1px solid var(--line); }
+		.eyebrow {
+			margin: 0 0 11px;
+			color: var(--red);
+			font-size: 11px;
+			font-weight: 700;
+			letter-spacing: .12em;
+			text-transform: uppercase;
+		}
+		h1 {
+			max-width: 760px;
+			margin: 0;
+			font-family: "Newsreader", Georgia, serif;
+			font-size: 42px;
+			font-weight: 500;
+			line-height: 1.12;
+			letter-spacing: 0;
+		}
+		.doc-description { max-width: 680px; margin: 13px 0 0; color: var(--muted); }
+		.doc-actions { display: flex; flex-wrap: wrap; gap: 17px; margin-top: 21px; }
+		.doc-actions a { font-size: 13px; font-weight: 600; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+
+		#content { padding-top: 30px; }
+		#content > :first-child { margin-top: 0; }
+		#content h2, #content h3, #content h4 {
+			margin: 2em 0 .6em;
+			font-family: "Newsreader", Georgia, serif;
+			font-weight: 500;
+			line-height: 1.25;
+			letter-spacing: 0;
+		}
+		#content h2 { font-size: 30px; }
+		#content h3 { font-size: 23px; }
+		#content h4 { font-size: 18px; }
+		#content p, #content li { color: #34443e; }
+		#content li + li { margin-top: 5px; }
+		#content a { text-underline-offset: 3px; }
+		#content blockquote {
+			margin: 24px 0;
+			padding: 5px 0 5px 19px;
+			border-left: 3px solid var(--red);
+			color: var(--muted);
+		}
+		#content blockquote p { margin: 0; }
+		#content code {
+			padding: 2px 5px;
+			background: var(--code);
+			border-radius: 2px;
+			font-size: .88em;
+		}
+		#content pre {
+			overflow-x: auto;
+			padding: 17px 19px;
+			background: #eaf0ec;
+			border: 1px solid var(--line);
+			border-radius: 3px;
+		}
+		#content pre code { padding: 0; background: transparent; }
+		#content table { width: 100%; border-collapse: collapse; font-size: 14px; }
+		#content th, #content td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+		#content th { color: var(--ink); background: #eaf0ec; font-weight: 700; }
+		#content hr { margin: 34px 0; border: 0; border-top: 1px solid var(--line); }
+		#content img { max-width: 100%; }
+
+		.mermaid-frame {
+			overflow-x: auto;
+			margin: 22px 0 28px;
+			padding: 19px 12px;
+			background: #fff;
+			border: 1px solid var(--line);
+			border-radius: 3px;
+		}
+		.mermaid { min-width: max-content; text-align: center; }
+		.mermaid svg { max-width: none; height: auto; }
+
+		.plain-text {
+			margin: 28px 0 0;
+			padding: 22px;
+			overflow-wrap: anywhere;
+			white-space: pre-wrap;
+			background: #fff;
+			border: 1px solid var(--line);
+			border-radius: 3px;
+			color: #34443e;
+			font: 14px/1.8 "DM Sans", sans-serif;
+		}
+
+		.status {
+			padding: 32px 0;
+			color: var(--muted);
+		}
+		.status.error { color: #9f321f; }
+		.footer-note { margin-top: 70px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+
+		@media (max-width: 800px) {
+			.shell { grid-template-columns: 1fr; }
+			.sidebar { position: relative; width: 100%; height: auto; padding: 16px 18px 12px; border-right: 0; border-bottom: 1px solid var(--line); }
+			.brand { padding: 0 2px 12px; border-bottom: 0; }
+			.search-wrap { margin: 8px 0 13px; }
+			.nav-label { display: none; }
+			.study-list { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 7px; }
+			.study-group { display: flex; flex: 0 0 auto; align-items: stretch; gap: 4px; }
+			.study-group + .study-group { padding: 0 0 0 12px; border-top: 0; border-left: 1px solid var(--line); }
+			.group-title { display: none; }
+			.doc-link { width: auto; min-width: 150px; border-left: 0; border-bottom: 2px solid transparent; }
+			.doc-link[aria-current="page"] { border-bottom-color: var(--green); }
+			.topbar { min-height: 50px; padding: 9px 20px; }
+			.reader { padding-top: 34px; }
+		}
+
+		@media (max-width: 520px) {
+			h1 { font-size: 34px; }
+			#content h2 { font-size: 26px; }
+			#content h3 { font-size: 21px; }
+			.topbar-note { display: none; }
+			#content table { display: block; overflow-x: auto; white-space: nowrap; }
+		}
+
+		@media (prefers-reduced-motion: no-preference) {
+			.reader { animation: arrive .35s ease-out both; }
+			@keyframes arrive { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+		}
+	</style>
+</head>
+<body>
+	<div class="shell">
+		<aside class="sidebar" aria-label="Case study navigation">
+			<div class="brand">
+				<div class="brand-mark" aria-hidden="true">F</div>
+				<div>
+					<div class="brand-name">Fieldnotes</div>
+					<div class="brand-caption">Systems case studies</div>
+				</div>
+			</div>
+
+			<label class="search-wrap">
+				<span class="sr-only" hidden>Filter case studies</span>
+				<input id="search" type="search" placeholder="Filter documents" autocomplete="off" aria-label="Filter documents">
+			</label>
+
+			<p class="nav-label">Library</p>
+			<nav id="study-list" class="study-list" aria-label="Documents"></nav>
+		</aside>
+
+		<main class="main">
+			<div class="topbar">
+				<div class="crumb">Library <span aria-hidden="true">/</span> <span id="crumb-current">Overview</span></div>
+				<div class="topbar-note">Architecture, systems, and engineering</div>
+			</div>
+
+			<article class="reader" aria-live="polite">
+				<header class="doc-header">
+					<p id="eyebrow" class="eyebrow">Case study library</p>
+					<h1 id="title">A closer look at the systems behind the interface.</h1>
+					<p id="description" class="doc-description">Choose a case study or source transcript to begin reading.</p>
+					<div id="actions" class="doc-actions"></div>
+				</header>
+				<div id="content">
+					<p class="status">Loading the case study library…</p>
+				</div>
+				<div class="footer-note">Documents are rendered from the files in this workspace.</div>
+			</article>
+		</main>
+	</div>
+
+	<script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+	<script>
+		let documents = [];
+
+		const nav = document.querySelector("#study-list");
+		const search = document.querySelector("#search");
+		const content = document.querySelector("#content");
+		const title = document.querySelector("#title");
+		const description = document.querySelector("#description");
+		const eyebrow = document.querySelector("#eyebrow");
+		const actions = document.querySelector("#actions");
+		const crumb = document.querySelector("#crumb-current");
+		let activePath = "2026-09-29_paypal_fraud_detection/paypal_fraud.md";
+
+		if (window.mermaid) {
+			mermaid.initialize({
+				startOnLoad: false,
+				securityLevel: "strict",
+				theme: "base",
+				themeVariables: {
+					primaryColor: "#e1f0e9",
+					primaryTextColor: "#182a25",
+					primaryBorderColor: "#176b55",
+					lineColor: "#61716b",
+					secondaryColor: "#f4f7f3",
+					tertiaryColor: "#ffffff",
+					fontFamily: "DM Sans, sans-serif"
+				}
+			});
+		}
+
+		function renderNavigation(filter = "") {
+			const query = filter.trim().toLowerCase();
+			const filtered = documents.filter(doc => `${doc.group} ${doc.title} ${doc.kind}`.toLowerCase().includes(query));
+			const groups = [...new Set(filtered.map(doc => doc.group))];
+
+			nav.replaceChildren();
+			if (!filtered.length) {
+				const empty = document.createElement("p");
+				empty.className = "empty-search";
+				empty.textContent = "No matching documents.";
+				nav.append(empty);
+				return;
+			}
+
+			for (const group of groups) {
+				const section = document.createElement("section");
+				section.className = "study-group";
+				const heading = document.createElement("h2");
+				heading.className = "group-title";
+				heading.textContent = group;
+				section.append(heading);
+
+				for (const doc of filtered.filter(item => item.group === group)) {
+					const button = document.createElement("button");
+					button.type = "button";
+					button.className = "doc-link";
+					button.dataset.path = doc.path;
+					button.setAttribute("aria-current", doc.path === activePath ? "page" : "false");
+					const name = document.createElement("span");
+					name.className = "doc-title";
+					name.textContent = doc.title;
+					const kind = document.createElement("span");
+					kind.className = "doc-kind";
+					kind.textContent = doc.kind;
+					button.append(name, kind);
+					button.addEventListener("click", () => loadDocument(doc));
+					section.append(button);
+				}
+				nav.append(section);
+			}
+		}
+
+		function setActions(doc) {
+			actions.replaceChildren();
+			const source = document.createElement("a");
+			source.href = doc.path;
+			source.target = "_blank";
+			source.rel = "noopener";
+			source.textContent = "Open source file ↗";
+			actions.append(source);
+			if (doc.format === "markdown") {
+				const raw = document.createElement("a");
+				raw.href = doc.path;
+				raw.download = "";
+				raw.textContent = "Download Markdown";
+				actions.append(raw);
+			}
+		}
+
+		async function loadDocument(doc) {
+			activePath = doc.path;
+			renderNavigation(search.value);
+			title.textContent = doc.title;
+			description.textContent = doc.description;
+			eyebrow.textContent = doc.group;
+			crumb.textContent = doc.title;
+			setActions(doc);
+			content.replaceChildren();
+			const loading = document.createElement("p");
+			loading.className = "status";
+			loading.textContent = "Loading document…";
+			content.append(loading);
+
+			try {
+				const response = await fetch(doc.path);
+				if (!response.ok) throw new Error(`Could not load ${doc.path} (${response.status}).`);
+				const source = await response.text();
+				content.replaceChildren();
+
+				if (doc.format === "text") {
+					const pre = document.createElement("pre");
+					pre.className = "plain-text";
+					pre.textContent = source;
+					content.append(pre);
+					return;
+				}
+
+				if (!window.marked || !window.DOMPurify) {
+					throw new Error("The Markdown renderer did not load. Check your internet connection and reload.");
+				}
+
+				const rendered = marked.parse(source, { gfm: true, breaks: false });
+				content.innerHTML = DOMPurify.sanitize(rendered);
+
+				const diagrams = [...content.querySelectorAll("pre code.language-mermaid")];
+				for (const code of diagrams) {
+					const frame = document.createElement("div");
+					frame.className = "mermaid-frame";
+					const diagram = document.createElement("div");
+					diagram.className = "mermaid";
+					diagram.textContent = code.textContent;
+					frame.append(diagram);
+					code.closest("pre").replaceWith(frame);
+				}
+
+				if (diagrams.length && window.mermaid) {
+					await mermaid.run({ nodes: [...content.querySelectorAll(".mermaid")] });
+				}
+			} catch (error) {
+				content.replaceChildren();
+				const message = document.createElement("p");
+				message.className = "status error";
+				message.textContent = `${error.message} You can still open the source file above.`;
+				content.append(message);
+			}
+		}
+
+		search.addEventListener("input", () => renderNavigation(search.value));
+		document.addEventListener("keydown", event => {
+			if (event.key === "/" && !["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) {
+				event.preventDefault();
+				search.focus();
+			}
+			if (event.key === "Escape" && document.activeElement === search) {
+				search.value = "";
+				renderNavigation();
+				search.blur();
+			}
+		});
+
+		async function initialize() {
+			try {
+				const response = await fetch("documents.json");
+				if (!response.ok) throw new Error(`Could not load the document catalog (${response.status}).`);
+				documents = await response.json();
+				if (!Array.isArray(documents) || documents.length === 0) {
+					throw new Error("The document catalog is empty or invalid.");
+				}
+				renderNavigation();
+				const initialDocument = documents.find(doc => doc.path === activePath) ?? documents[0];
+				loadDocument(initialDocument);
+			} catch (error) {
+				content.replaceChildren();
+				const message = document.createElement("p");
+				message.className = "status error";
+				message.textContent = `${error.message} Check that documents.json is available beside index.html.`;
+				content.append(message);
+			}
+		}
+
+		initialize();
+	</script>
+</body>
+</html>

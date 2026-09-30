@@ -1,0 +1,280 @@
+On Friday, July 19, 2024, at 4:09 a.m. Coordinated Universal Time ( UTC), cybersecurity company
+CrowdStrike sent a small file to every Windows computer running its software. The file weighed about
+40 kilobytes. This was not a program. This wasn't a code update. It was just configuration data, a
+rules file. And after 78 minutes they called him back. And in those 78 minutes, 8.5 million Windows
+computers around the world “ crashed” to a “blue screen,” then rebooted again and crashed again.
+Thousands of flights were canceled. Delta Airlines was unable to operate for 5 days in a row.
+Hospitals postponed scheduled surgeries. Banks have suspended operations. 911 emergency services
+have stopped working in many US states . Sky News was interrupted in the middle of a live broadcast.
+And at airports, passengers were given handwritten boarding passes . It was the largest IT failure
+in the history of computer technology. Losses for Fortune 500 companies alone are estimated at $5.4
+billion. And here's the craziest part. This was not a cyberattack. The file that caused this came
+from the company that these machines paid for their protection. And if you trace everything back to
+the kernel, to the driver, to the file, then the whole disaster comes down to one erroneous number.
+It said 21, while the code should have returned 20. So the biggest failure in history was due to an
+array overflow. This video is for SRE engineers, platform engineers, security specialists—in
+general, anyone who delivers software to a large number of servers. All information in this video is
+taken from CrowdStrike's report on the causes of the outage, Microsoft's technical reviews,
+congressional testimony, and independent reverse engineering. I have compiled all publicly available
+information into these visual diagrams. So the video will be very visual. Stay until the end if you
+want to understand how the biggest IT failure in history happened. Let's start with a paradox. 8.5
+million machines sounds like a huge number, but in reality it's less than 1% of all Windows
+computers on Earth. Microsoft themselves announced this. So how could less than 1% paralyze the
+entire planet? Because of what kind of cars they were. CrowdStrike's Falcon product doesn't run on
+regular home laptops. It is installed on corporate computers. This is what a company sets up when it
+becomes a big enough target: airport systems, medical databases, workstations in banks, trading
+floors. About a quarter of Fortune 500 companies took a direct hit that morning. Many machines that
+you don't even think of as computers, such as check-in kiosks, departure boards, payment terminals,
+or MRI scan screens, run Windows on the inside, with CrowdStrike's Falcon installed. So no, it
+wasn't the majority of computers in the world, it was the 1% that actually runs the world. To
+understand this glitch, you first need to understand what this software does, because most engineers
+outside of the security field have never looked at it. Falcon from CrowdStrike is an EDR system.
+This is an endpoint detection and response system . Think of it as an antivirus, but on steroids. It
+doesn't just scan files for known signatures, it monitors every process running on the machine,
+every open file, every network connection, and every message between processes. And when it sees a
+pattern or attack behavior, it blocks that process in real time right during the attack. Think about
+what this job requires. It requires three things. First, she has to see everything that happens in
+the car. It must act before the malware is triggered, not after, and it must be invulnerable,
+because the first step of any professional malware is to disable the security agent. All three of
+these requirements point to one place—the core of the system. Every Windows machine has two modes .
+You can perceive them as two separate worlds. User mode is where your applications run: Chrome,
+Excel, your code, and each process has its own isolated memory. And if a process tries to access
+someone else's memory, Windows simply kills that process, and everything else continues to run. But
+kernel mode is the operating system itself. This is a scheduler, memory manager, drivers. There are
+no walls in kernel mode. Everything has a common memory space and a single area of ​​trust. So what
+happens when kernel code touches memory it shouldn't have access to? Windows does something that
+most people don't even realize. She intentionally kills herself . A "blue screen" in Windows is not
+a system crash. This is a design decision called "stop on failure." The logic is that if the kernel
+state is corrupted, I can't trust anything anymore . My next write to the disk may destroy your
+data. Therefore, the safest thing I can do is to stop immediately and turn off the entire machine,
+including myself. This is what I want you to remember: any bug in any kernel driver from any
+developer is inherently fatal to the entire machine. This is the agreement you sign when you enter
+the core. And that's why Microsoft guards the entrance to the system kernel. To release a kernel
+driver for Windows, you need to pass WHQL— Microsoft's hardware quality validation program . Your
+driver is tested, certified, and cryptographically signed by Microsoft. This process takes weeks.
+Kernel code should be sparse, stable, and immutable. But now let's look at CrowdStrike's business.
+Attackers change tactics daily, sometimes even hourly. If a new attack method emerges this morning,
+CrowdStrike customers expect to see it detected today. This, in fact, is the product itself. This is
+the reaction speed. But here a conflict arises. The detection logic should change daily, and it
+should work where the code is "frozen" due to long certification . So, how do you deliver daily
+logic updates to a place where the code can't change? You separate the engine from the fuel, like
+they do in rocket technology. The driver, a file called CS agent.sys, is an engine that is certified
+and signed by Microsoft only once. Inside this driver, CrowdStrike created an interpreter—a content
+processing mechanism. So the actual detection logic is delivered separately as data, and CrowdStrike
+calls them channel files. The driver reads and interprets them, changing its behavior without
+changing a single byte of the signed code. This system consists of two parts. You need to understand
+both to continue watching the video. The first is the template types, which are essentially code.
+They are located inside the sensor, and each one monitors a specific category of behavior, such as
+process creation, file writing, or network activity. So, template types are shipped in a slow
+certified path along with sensor releases. The second part is the template instances, which are
+essentially data. These are specific rules, templates for compliance within this category. They are
+supplied as channel files. They are updated constantly because it is the fastest way. This solves a
+very real problem. The CrowdStrike core driver can only change a few times a year because each
+release must be tested, signed, and carefully deployed . But new attack methods appear constantly,
+sometimes several times a week. If CrowdStrike had to release a new driver every time to detect a
+new attack, they wouldn't have time. Therefore, the driver remains almost unchanged, and the
+detection rules are updated separately as channel files. Thus, the mechanism changes slowly, while
+the detection can change rapidly. And this is not unusual. This is how most modern endpoint
+protection products work . The industry needs a fast way to respond to new threats within hours
+without releasing new kernel code every time. There is one more detail. Channel files have numbers.
+File 299, for example, defines how the sensor evaluates named pipes, similar to Windows pipes for
+interprocess communication. Attackers love named channels. Frameworks like Cobalt Strike use them to
+move around invisibly and communicate with control systems. So 291 is an important file that changes
+frequently. And remember this number: file 291. So CrowdStrike is distributing two types of updates,
+and they go in two very different directions. The slow path is sensor releases, that is, the code
+itself. They are released after full testing. CrowdStrike first launches new versions on its own
+machines, then gradually deploys them, and customers control the versions themselves. Companies
+actually appreciate this feature. As an enterprise, you can configure your own fleet of machines to
+use versions n -1 or n-2, deliberately lagging behind by one or two versions to let the rest of the
+world find bugs for you. And the fast way is quick response content, that is, channel files. So, a
+new instance of the template is validated by a single automated gateway—a cloud service called a “
+content validator.” If it passes the test, it is immediately sent to the entire server fleet, to
+each client, to each machine. So let me repeat that, because this is the most important part of the
+entire video. Customers, such as large companies, could control the deployment of new versions of
+sensors. Many of them deliberately stayed one or two versions behind so as not to be first in line
+for a failed update. But these controls only applied to the sensor itself. Channel files are a
+different matter. After the channel file passed through CrowdStrike's verification pipeline, it was
+distributed worldwide. Companies that believed they were doing a phased update received the new
+content immediately, just like everyone else, even if they chose sensor version n-1 or n-2. So in
+practice there were two update systems. One was gradual and client-controlled, the other was
+virtually global and instantaneous. And that's what made the radius of impact so large. One content
+update failed to deploy to multiple test machines or a small percentage of customers. It was
+simultaneously distributed to Falcon sensors around the world at almost the same time. If the
+details weren't entirely clear up to this point—that's no problem, because in this section I'll
+repeat some things, and they'll make more sense since you already have a general idea of ​​the
+problem. So, in February 2024, CrowdStrike released sensor version 7.11. Along with this, a new
+detection feature has appeared, designed to monitor suspicious activity related to Windows named
+pipes. This is a communication mechanism that malware often uses to transfer data between processes.
+So, these are Windows named pipes. To support this new detection mechanism, CrowdStrike has also
+introduced a new template type. I already explained what a template type is, as we talked about
+these two things that CrowdStrike supplies, but you can think of a template type as a contract. It
+clearly defines what information the detection rule must receive for its execution. This new
+contract required 21 pieces of information, but the sensor code that collected that data only
+provided 20. So one part of the system thought field 21 existed, another part never provided it, and
+21 items were expected, but 20 were delivered. This was a mismatch that occurred right at the
+interface between these two components. The definition was one thing, the implementation was
+another, and it was rolled out worldwide in February, after which it simply remained on almost every
+Falcon machine on the planet. And it was actually " charged" for 5 months. Now the obvious question
+arises: how could something like this go unnoticed for 5 months? The answer is wildcards. Every
+instance of the template released for this type from February to July used a wildcard in field 21,
+which means "match anything." Think about what the interpreter does when the command "match anything
+" is given. It doesn't need to compare anything, so it doesn't read input number 21 at all. The
+input array only has 20 slots, but since no one ever accesses slot 21, nothing goes wrong. The
+content validator checked the rule against the specification, not the actual sensor code. The
+specification required 21 fields, the rule had 21 fields, so the validator simply approved it. He
+never noticed that the sensor itself only provided 20 fields. Putting all these facts together, the
+instances fit the definition and the sensor code was internally consistent. The only thing that was
+broken was the contract between them. The definition promised 21, the code provided 20, and this
+contract was not checked by anyone: neither the validator, nor the compiler, nor the test script.
+So, these were two different components. Each of them worked correctly separately, but together they
+worked incorrectly. And if this sounds familiar, it's very similar to the bug we saw in the Data Dog
+video, where system D and cilium were behaving appropriately , but they were sharing a state that
+neither of them controlled. And that error in Data Dog remained unnoticed for 27 months. This same
+problem existed for 5 months. In my video about Data Dog, many people commented: “Hey, where were
+the tests? Why did n't the tests work properly? And why wasn't this detected during testing? Now the
+question every senior engineer asks is the same: "Where were the tests?" The tests existed, and they
+were all successful. And here is the reason. The new IPC template type was load tested back in
+February using wildcard template instances in field 21, and all of it passed successfully. And the
+first real copies with wildcards were released in March. So, the validator also successfully checked
+all of this. Everything was fine in the production. In the spring, more wildcard instances appeared
+, and everything was fine. So, each test checked existing paths, and the fatal path did not yet
+exist because no code changes were required to fail . All it needed was data that no one had entered
+yet. So that's the scariest part of this mistake. The code was fully deployed and completely cracked
+within 5 months. Your set of tests is essentially a selective reality check , right? It can't check
+a configuration file that someone writes only in July. In the case of DataDog, the problem scenario
+was a condition that was not present in any test environment: restarting a machine that had been
+running for a week . Here, the problem scenario is input data that has not yet been created. And in
+both cases, all the tests were passed for one deep reason. The tests could only verify the world
+that already existed. Before we delve deeper, I want to take a short break. I want to tell you about
+AlgoRock—a platform I created for senior , lead engineers or architects where you can start your
+training. You can join the platform for just $9 per month, and full access to it costs just $15 per
+month. And there's another side of this platform called the "academy"—it's more of a hands-on course
+where you learn how to create such systems from an architectural design perspective; The cost of
+live training is about $2,400 for a lifetime. This only happens once or twice a year, and this year
+it already has. But all this content is available for a third of the price— $799 for life. This is
+actually 12 intensive sessions of 4 hours each, where we will solve complex system design problems
+together. Along with this lifetime access, you also get 3 years of access to the Architect Platform.
+So , if you are interested, be sure to visit algorok.io. I will leave a link in the description to
+this video. So, nothing happened for 5 months . Then, on July 19, everything came together.
+CrowdStrike's threat intelligence team observed a new attack method in which attackers used named
+pipes to control systems. The CrowdStrike team responded with two new IPC template instances ready
+for deployment via the fast lane. One of them, for the first time in the entire existence of this
+type of template, contained a real value in field 21, not a template character, that is, a real
+matching criterion. The content validator checked it: 21 fields, meets the definition, valid,
+passed. At 4:09 UTC, a new version of channel file 291 hits the fast lane. And every online Falcon
+machine in the world starts downloading it. If you think about it, the gun was loaded in February,
+but the trigger was pulled just now. Let's see what happened on each machine in the correct
+sequence. The file was saved to disk and the sensor loaded it. And the next time a named pipe event
+occurs, and on Windows this happens all the time, the interpreter evaluates the new rule. So, the
+first field is compared , the second, the third, and so on until the 21st—everything passes the
+test. And on the 21st field, the system tries to get input value number 21, but the input data array
+has only 20 entries, and the interpreter reads data outside the array into someone else's memory,
+which results in an invalid address access. In user mode, it's just an access violation, the process
+terminates, Windows ignores it, and everything continues to work, but this is not user mode. This is
+kernel mode. The kernel gets a page fault that it can't handle, and Windows does exactly what we
+said it should do in such cases. It stops due to a critical error. The classic stop code, "page
+fault in non-paged area", blamed csagent.sys, and a " blue screen" appeared. So, the computer didn't
+crash. The machine performed its last duty flawlessly. And since the file spread everywhere at the
+same time, it happened everywhere at the same time. In Australia, it was the height of the workday,
+4:09 UTC—that's midday in Sydney. So Australia watched it live while Europe woke up with broken
+computers and America was still asleep. At 5:27 UTC, CrowdStrike identified the cause and rolled
+back the file. It took 78 minutes, and the corrected channel file was already on their servers. So,
+the problem is solved, right? The machines reboot, download the patch, and you're done. But no, and
+that's the scariest detail in this whole story. The Falcon sensor is a driver that starts at boot
+time. It loads early, before the system is fully powered on , because a security agent that loads
+late loses out to malware. This is a feature so that the attacker, in essence, does not get a head
+start. But at the beginning of the boot, the driver does what it always does. It analyzes the
+channel files, including the " poisonous" 291st one, which is already on the disk, and " puts down"
+the system before the network starts working. So: reboot, start driver, analyze file, crash, reboot,
+start driver, analyze file, crash. Although the fix exists, it's 80 milliseconds away on
+CrowdStrike's servers, but the machine can't hold out long enough to download it. That's the
+problem. This is the same channel through which the error came, but if you use it to treat the
+machine, nothing happens. So, the failure actually blocked itself . But loading is not perfectly
+deterministic. Sometimes the network would come up quickly enough that the sensor updater would grab
+the patched file a few seconds before the critical failure— the chances were slim, but not zero. And
+that's why Microsoft's official advice contained something that sounded almost absurd. It was
+recommended to reboot the machine, and if that didn't help, repeat this up to 15 times. The logic
+was simple: every reboot is a chance to get a fixed file before a crash occurs. But for many
+machines, this constant rebooting up to 15 times did not help, and the solution was this: boot into
+safe mode or recovery environment, go to system 32 drivers, CrowdStrike, delete C291 files, reboot,
+30 seconds per machine. Now multiply 30 seconds by 8 and a half million. But there was one catch.
+Every remote control tool you would normally use for this requires a loaded operating system, which
+is exactly what these machines were not meant to do. So to fix it, people had to physically sit at
+keyboards, working on each machine individually. And it got even worse because of BitLocker.
+Corporate drives, as you know, are encrypted as they should be , and safe mode on an encrypted drive
+requires a 48-digit BitLocker recovery key. And where do companies store these keys? They store them
+on management servers in Active Directory. And in many companies that morning, guess what those
+servers were showing ? They showed a "blue screen". So the key needed to unlock the solution was
+locked inside what needed fixing. So, in the Data Dog video, we saw engineers working blindly for
+hours because their monitoring was part of their own failure. And it's exactly the same principle on
+a civilizational scale. The path to recovery was blocked by the failure he was supposed to fix. So
+the actual recovery looked something like this: IT staff went from desk to desk with USB drives.
+People on ladders worked in data centers, and companies frantically printed recovery keys from any
+domain controller that was still responding. Microsoft and CrowdStrike sent out bootable USB tools
+to restore large server fleets, which took weeks. And there's another funny detail: the only
+machines that survived were the ones that were turned off, because the machines that were in sleep
+mode during those 78 minutes simply couldn't download the file. So the laptop you left closed, say,
+Thursday night, is what saved you on Friday morning. So, let's add up the losses. That's 8.5 million
+machines, and that's Microsoft's data based on crash telemetry, so it's almost certainly an
+underestimate . Direct losses to Fortune 500 companies alone were estimated to be around $5.4
+billion, of which only a small fraction was insured. Delta Airlines was hit the hardest. Thousands
+of canceled flights in 5 days, half a billion dollars in claimed damages, and a lawsuit against
+CrowdStrike that escalated into counterclaims. CrowdStrike's own shares lost about a third of their
+value in the weeks after that. And then the most interesting thing happened: most customers stayed,
+because removing the EDR system from 100,000 endpoints is a separate, high- risk, multi-month
+project. And the same time scale that brought CrowdStrike success has also made it difficult to
+abandon their services. And now an interesting question. CrowdStrike Falcon also works on macOS and
+Linux. And they use the same product, but not a single Mac computer has failed . Why is that?
+Because in 2019, Apple kicked everyone out of the kernel, deprecated kernel extensions, and forced
+security software developers to use a user- space API—the Endpoint Security Framework. The kernel
+broadcasts events to the security agent, which runs as a regular process. So, on a Mac, if Falcon
+experiences a critical error, only Falcon "crashes" and the computer continues to work. Thus, Apple
+completely deprived developers of the ability to influence the radius of impact. Even Linux
+computers were not affected because Linux has eBPF, so you load a small program into an isolated
+virtual machine inside the kernel. And before it is allowed to load, the verifier checks it for
+safety. It proves that the program will not run out of memory, loop, or touch memory that does not
+belong to it. If you've seen my video about AWS, this should be familiar to you, because there's
+Zelkova—a theorem prover that checks every possible query against an S3 bucket's policy. And the
+eBPF verifier is exactly the same idea, but applied to the kernel code. That is, it is not just
+testing on examples, but proving the correctness of all execution paths. The very class of bugs that
+brought down 8.5 million computers on Windows are instantly rejected in Linux eBPF. So why is
+Windows an exception? This is a consequence of decades of building drivers this way , and partly
+because of regulatory requirements. In 2009, Microsoft promised European regulators that security
+developers would have the same access to the kernel as Microsoft's own defender—Defender. So if you
+kick developers out of the core, you'll trigger an antitrust lawsuit again. Let's see what exactly
+was fixed after the crash. First, CrowdStrike resolved the immediate technical issues. The
+interpreter now checks for bounds before reading input fields, and the validator more carefully
+controls the number of fields. And test cases now cover real values, not just wildcards. The update
+pipeline has received features that were not available before: staged deployment , rollback
+capability, customer control, and quick checks. Following this incident, Microsoft also launched the
+Windows resiliency initiative , which is working with security vendors to develop a supported way to
+secure endpoints outside of the kernel so that an agent failure only results in a process
+termination, rather than bringing down the entire machine. This is the lesson from Apple and eBPF
+that has finally come to Windows: the impact zone of a security software failure should be smaller
+than the machine itself. The most profound solution we got from the AWS video: where error is
+unacceptable , content should not be tested, but proven . So, perform a check before the interpreter
+so that a "poisoned" rule does not "fail" gracefully, but simply cannot be loaded at all. So, there
+are five things you can implement into your own systems immediately. First: configuration is also
+code. So if a file changes the behavior of your entire system, it deserves everything your code
+gets: reviews, tests, canary deployments, and rollbacks. Second: your real radius of impact is your
+deployment radius. Anything that can cover 100% of your fleet in less than an hour is your biggest
+point of failure. Third: check contracts, not just artifacts. Yes, the template instances were
+valid, the sensor code was consistent, but no one checked the boundary between them. So check your
+interfaces at build time, at load time, and at runtime. Fourth: a successful test only indicates
+input data that already exists. The fatal data had not yet been created, so 5 months of successful
+tests were worthless. That is why you should phase the content pipeline, test the boundary values
+​​of the schemes, etc. Fifth, and this is the same lesson from the DataDog video: plan for recovery
+in case the day your machines can't help you. What if you don't have a network, agents, remote
+access, and the disk is encrypted? So you should go through your runbook line by line and ask
+yourself: what steps assume the OS is loaded, where are your BitLocker keys, and what needs to be
+running so you can read them? Here is the thought I want to leave you with. Let's say you manage a
+server fleet, maybe you're a senior engineer or DevOps, DevSecOps, SRE— whoever. Your server farm
+already has a lot of things connected to it. There are many high-speed channels for accessing the
+server park, for example, many components that are updated automatically. This could be your EDR,
+observability agent, MDM, or container runtime. And each of them is actually a channel from a
+particular vendor's CI system directly to each of your machines, bypassing your change management.
+And this is precisely why global disruptions occur. So make sure you understand what you're getting
+into. I hope you enjoyed this video and these in-depth analyses, because a lot of effort went into
+researching information, analyzing, creating diagrams, thinking through content, filming, and
+editing . All this takes a lot of time. Don't forget to like , comment if you have any questions,
+and share this video with your friends and colleagues. See you in the next issue.

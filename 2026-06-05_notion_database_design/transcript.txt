@@ -1,0 +1,239 @@
+If you opened up Notion's database right now, and you looked inside, you would find something that
+almost no software architecture textbook would tell you to build. Because everything in Notion,
+every paragraph you've ever typed, every checkbox, every image, every database row, every page,
+every workspace, everything lives in basically one table, one unified data structure, and it's
+called a block. And the thing is, this is not a hack. This is not technical debt. This is a
+deliberate, deeply thought-out choice that made Notion Notion. And without that one decision, Notion
+would not exist as a product that you now know. And with this decision, they scale to over 200
+billion blocks of content across millions of workspaces. So, in today's video, we're going to walk
+through the data model behind Notion, and honestly, the story is way more interesting than what you
+would imagine. Because just that single decision, that one architectural choice, cascades into every
+other engineering problem that Notion has had to solve, like their permission system, or their
+sharding strategy, or the way they handle offline data, or the way they built AI features. And all
+of it traces back to this one decision that they made in 2016. The most important lesson that you'll
+take away from this video is that data model decisions are the most consequential decisions that you
+will ever make. Because you can always swap the database that you pick. You can always refactor the
+framework that you pick. But the shape of your data, especially once you've got 200 billion rows are
+organized around it, that's basically permanent. You can't go back. Now, the way that most software
+is built is that you've got documents, which are kind of an object. You've got database rows, which
+are kind of another object. You've got wiki pages, which are also another kind of object. And each
+of these has its own schema, its own storage layer, its own API. They're basically separate things
+that you stitch together at the UI layer. But Notion said, "No, we don't want any of that, and we're
+going to have just one type of object, and we're going to call it a block." And then everything,
+like every paragraph, image, every checkbox, every database row, every page, every embedded widget,
+is going to all become a block. It's going to be the same structure. It's going to have the same
+storage. It's all going to be having the same API. And the only thing that changes is the type field
+on the block, which tells the UI how to render it. So, you just have one unified data model and the
+structure of a block is actually very simple. You've got an ID, which is a UUID. You've got a type,
+which says what kind of block this is. You've got properties, which is a JSON blob. You've got
+content, which is an array of pointers to child blocks. You've got a parent pointer and you've got
+some metadata, like when was it created, when was it edited, who owns it, and so on. And that's
+basically the whole schema and you can look at it. It's very simple. And yet every single thing that
+you can do in Notion is just built on top of this. So, now the question becomes comes, why is this
+so powerful? And this is what we'll discuss about right now, like what the block model unlocks,
+because the upside to this is genuinely huge. And there are three things really. The first is
+composability. So, when everything is a block, you can put anything inside anything and you can nest
+a database inside a page. You can put a to-do list inside toggle inside a table cell inside a
+database row. So, there's no special code for can a database be inside a page, because every parent-
+child relationship is the same operation. So, the page just has a database's block ID in its content
+array and that's it. The composability is free, because the data model does not distinguish. The
+second thing is that you have one API surface for everything. Everything is a block and you need
+only one set of operations. So, you can create a block, update a block, delete a block, move a
+block. Those four operations handle every editing action a user can take inside Notion. So, if you
+want to bold a word, that's an update to a block's properties. If you want to indent a list item,
+that's a move. If you want to indent a list item, that's a move. Re-parent this block. If you want
+to delete a page, you can just delete the block. Now, compare that to a system where every type of
+object has its own create, update, delete API and you've got an explosion of endpoints. Notion has
+only four. And the third one, which is a subtle one, is that there's infinite extensibility without
+schema migration. So, when Notion wants to ship a new block type, say a code block or a math
+equation or an AI summary block, they don't need to migrate any database tables. They don't need to
+add a new column, they just register a new type value and a new renderer in the front end. The back
+end does not change, the schema does not change, and the new block type is just another block. And
+new features shipped without database work, and that's huge. So, we look at three things:
+composability and single API schema-free extensibility. Well, these are the reasons Notion can build
+features that competitors can't, or features that competitors could build, but only by tearing apart
+their entire data model first. So, Notion's competition keeps shipping features that look like
+Notion's features, but they're much slower because they're fighting against their own data models
+the whole way. Now, before we go any further, I want to tell you about the AlgoRock cohort, which I
+personally teach to a group of 10 to 15 senior engineers. It's a 12-weeks program, and it's geared
+towards advanced system design and learning post-AI architectural skills. Now, this is for people
+who already know the basics of system design and architecture, and want to build the next generation
+of production-level software. The next cohort is going to start in July. So, I want you to go to the
+website algorock.io, which is algoroq.io, and actually go through the list of topics that we're
+going to cover. If you like these topics, I want you to fill up the form that opens up when you hit
+the enroll button. Once you've done that, I'll check to see if you're a great fit, and then I'll set
+up a call with you. It's about $2,400 for the live cohort, which I teach personally for 12 weeks.
+But, if you just wanted access to the pre-recorded videos, that'll be about $800. The kind of people
+who attend this cohort have experience between 7 years all the way to 26 years of experience. And
+this is a perfect fit for SREs, platform engineers, principal engineers, staff engineers, senior
+engineers, enterprise and solution architect. If you're a junior engineer starting your career, this
+is not right for you, so please don't fill up the form. Okay, so let's talk about what the block
+model costs you. Because when everything is a block, and blocks can be nested arbitrarily inside
+other blocks, you've effectively built a tree, or really a forest, since each workspace is its own
+tree. And the point is, your data is no longer relational. It's hierarchical. It's a graph. And
+graphs are great for some things, but they are terrible for one specific thing that turns out to
+matter enormously, which is permissions. So, think about it this way. In a normal application, you
+have a documents table, and each document has an owner ID column. And when someone wants to view a
+document, you do a single index look up. Is this user the owner? That's just one query and it's
+constant time. In Notion, permissions don't work like that. Permissions are inherited. If I share a
+top-level page with you, you get access to that page and every block nested inside it. And then
+every subpage nested inside that and every block inside those subpages, recursively all the way
+down. So when you click on a single block in Notion to view it, the back end can't just check, do
+you have access to this block? It has to walk up the ancestor tree all the way to the root workspace
+checking at each level whether anyone set an explicit permission that applies to you. And if a page
+along the way has an explicit grant or denial, that wins. And if not, you keep walking up.
+Eventually, you hit the workspace root and you get a final answer. For one block, this is fine
+because that's maybe four or five database lookups, but Notion doesn't load one block at a time.
+When you open a page, the back end has to figure out which blocks you can see. And that means it has
+to check for every block on that page and pages basically can have thousands of blocks. So it has to
+walk the entire ancestor tree. And this is the actual scaling problem that the block model creates.
+The permission competition is the most expensive thing the system does. And it's not a fixable bug.
+It's an inherent consequence of the data model. So block plus nested plus inherited permissions is
+equal to ancestor tree traversal on every request, which means basically for a lot of requests,
+there's a lot of ancestor tree travel. And this is one of the moments where you start seeing the
+real cost of an architectural decision. The block model that gave Notion incredible flexibility has
+also given them a permission system that's structurally expensive forever. And they've been
+engineering around this cost for nearly a decade now. And the way they've engineered around it is
+actually very clever, which we'll get to right now. And this is where Notion did something really,
+really smart. So pay attention here. The problem they had to solve is that they needed two different
+tree structures over the same data. On the one hand, they had the render tree because when you open
+a page, the front end needs to know what to show. The page block has a content array and that array
+contains the IDs of all the blocks that should appear inside the page in order. And those blocks
+might have their own content arrays. And the render is built by walking down from the page through
+this content tree. On the other hand, they had the permission tree to check whether user can see a
+block, you need to walk up from block through its parents looking for permission grants, and that's
+a totally different tree walk going upward instead of downward. So, here's the thing, these two
+trees are not the same, and the reason they're not the same is quite subtle. Imagine you've got a
+page and inside that page there's a block that references another block like an inline mention of
+another page, the render tree includes that mention block in some position, but the permission tree
+for that mention block is not determined by where it's rendered, it's determined by where it lives
+and where it was created and who owns it structurally. So, Notion built their data model with two
+pointer systems, every block has a content array, that's the downward pointer system used for
+rendering, and every block also has a parent ID, that's the upward pointer used for permissions and
+ownership. And this might sound like over-engineering because why not just have one tree? And the
+answer is because they do different things and they need to be optimized differently. The render
+tree gets walked top-down on every page load, and the parent pointer gets walked bottom-up on every
+permission check. By separating them, Notion can index them differently, cache them differently, and
+most importantly, they can change one without affecting the other. So, here's the operational
+payoff, when you move a block from one page to another in Notion, you can either change just the
+content arrays, which is the rendering moves but permission stay put, or you can change the parent
+ID too, which moves both of them. The product surface lets users do either, and the data model
+accommodates it cleanly because the two concerns are separated. This is what good data modeling
+looks like. Separate the things that are conceptually different even when they look the same. And
+the block is one entity, but it participates in two different trees, and Notion modeled those two
+trees explicitly instead of conflating them. And that's the move. All right, Notion has done this
+beautiful data model where everything is a block and you have two pointer systems and the render
+tree is there and the permission tree is different, and Postgres now handles all of it. But now, all
+of a sudden, Notion starts growing rapidly. And in 2021, they had about 20 billion blocks in their
+Postgres database, and that's a lot. But, it was all still on a single Postgres setup with some
+basic replication. And by 2024, they had over 200 billion blocks, doubling every 6 to 12 months. And
+that's a wild growth rate, and it created two completely different scaling problems that Notion had
+to solve in parallel. Problem one was around operational databases, the system serving the live user
+requests. So, Postgres holding 200 billion rows on a single primary does not work. It cannot fit in
+memory, indexes get too big to scan, and query planners start making bad decisions. And the second
+problem is around analytics. Now, Notion wanted to build features like search, AI, and analytics
+dashboards. Those features need to do massive scans all over the block data. You cannot run a scan
+every block in the workspace query against your production Postgres without taking down the product.
+Analytics workloads and live workloads need to live in different worlds. So, they had to solve both
+at the same time. They sharded the production Postgres, and they built a data lake for analytics.
+So, they're two different responses to two different aspects of the same scale problem. So, let's
+walk through both. Okay, so the first up is how Notion sharded Postgres, and the sharding decision
+is where [clears throat] they get to leverage one specific property of the data that not every
+system has. So, the question is, what do you shard on? Now, if you remember the Instagram video
+where we talked about how Instagram scaled Postgres to million users, there when Instagram sharded,
+they sharded by user ID. And that made single user queries fast, but cross user queries expensive.
+And every data model has this trade. For Notion, the equivalent question is, what natural grouping
+in the data should live together on the same shard? And the answer is workspaces. So, now think
+about it from a query perspective. When you open Notion, you're in one workspace. It could be your
+company's workspace, and every block you load belongs to that workspace. And every permission check
+happens within that workspace's tree, and every search you do is scoped to that workspace. The
+workspace is the natural unit of access. So, almost every read query in the system is naturally
+bounded by workspace ID. So, Notion actually shards by workspace. So, all blocks belonging to a
+given workspace live together on the same shard. And when you load a page, the back end knows your
+workspace ID, hashes it to a shard, and that one shard has everything it needs to serve the request.
+So, as of 2023, Notion ran 96 Postgres instances, each holding five logical shards. So, 480 logical
+shards total. And the reason for that split is the same as the one we saw in the Instagram video,
+which is the logical versus physical decoupling. We've covered that before. Now, the logical
+sharding does not change, and the physical hosts can be added or rebalanced without re hashing data.
+So, the reason that workspaces work as a shard key so well for Notion because it matches the actual
+access pattern of how the product works. Almost every single query Notion is scoped to one
+workspace, so you don't search across workspaces, you don't share pages across workspaces, and you
+don't compute analytics across workspaces from the product surface. So, co-locating all the data for
+a workspace means the common case is one shard, one query, and that's actually really fast. And this
+is the principle here. Your shard key should match how your data is actually accessed. If the
+natural unit of access in your product is the user, then you should shard by user. If it's the
+workspace, then you should shard by workspace. If it's the team, then you should shard by team, and
+so on. Now, in case you're new on this YouTube channel, you should know that I have a ultimate
+system design for beginners playlist, which has more than 50 videos, and I also have an intermediate
+system design playlist, which will have more than 10 videos. Apart from that, I have the technology
+architect course playlist, and I have the 7 hours of microservices breakdown video on how to handle
+microservices in production. It has more than 100,000 views. Now, if you watch all of this content,
+you'll know system design and architecture better than 99% of people on the planet. Okay, so let's
+move ahead. Now, workspace as shard key that we just saw is only a good idea if your data really is
+bounded by workspace. If you had heavy cross-workspace queries, like show me all the pages
+mentioning Bitcoin across every workspace on the platform, then workspace sharding would be really
+bad for you. And that query actually becomes a scatter across all 480 shards. So, the choice is
+conditional. The shard key encodes the assumption that some queries will be rare. And if that
+assumption turns out to be wrong later, you'll be stuck. Okay, so now Notion have sharded for the
+operational workload, but that handles the live product. It does not handle the second problem,
+which is analytics and AI. So now when Notion wanted to build features like search across your
+workspace or the AI Q&amp;A that reads through every page in your workspace and answers questions
+about it, they needed to run massive analytical queries over block data. And they had to scan every
+block, embed every block, compute features over every block. And you cannot do this against your
+production post. Or rather, you can, but you'll take the product down. So analytical queries and
+transactional queries fundamentally conflict. One wants to scan, the other wants to index and seek,
+and they fight for the same resources. So Notion did what most large-scale systems eventually do.
+They built a separate data layer optimized for analytics. They call it their data lake. And it's
+built on top of Apache Hudi, which is a transactional layer over object storage that lets you do
+efficient incremental updates without rewriting all your data. And this is how the architecture
+works. The operational post is the actual source of truth. So every change to post like every block
+created, updated, or deleted gets captured by a post as logical replication and streamed into a
+pipeline. And that pipeline lands the changes into the data lake, where they're stored in a columnar
+format on object. And from the data lake, downstream consumers can read everything. The AI features
+pull from there to compute embeddings. The search index reads from there to build search structures.
+And analytics dashboards query against it directly. So in this case, the two worlds don't conflict
+because they're not on the same database. The operational world is optimized for low latency
+lookups. The analytical world is optimized for massive scans, and each gets the right tool. And the
+reason Notion could build the AI Q&amp;A feature or the cross workspace search or any other analytic
+product, the reason these things became possible is because they had the separation in place. So
+without the data lake, none of this works. The post shards would just melt under analytical load. So
+this is the second main lesson of this video, which is production databases serve queries and
+analytical systems answer questions. The minute you start asking your production database to do
+both, you're going to be in trouble. So, you either need a read replica setup or you need a separate
+analytical store or you need both of them. Okay, so now I want to cover what all of this costs.
+Because as senior engineers, we don't want to skip trade-offs. Even with all the brilliant things
+that Notion has done, they still have a lot of trade-offs. Now, the block model is actually
+expensive at every layer. It makes permissions expensive because every check is a tree walk as we
+have covered. It makes search expensive because you can't just index a document. You have to
+recursively flatten tree first. And it makes end-to-end encryption very hard. Even if you encrypt
+the contents of each block, the relationships between the blocks are still visible to the back end
+because the back end needs to traverse those relationships to do anything useful. And true end-to-
+end encryption on Notion is essentially impossible without changing the model. It makes data
+migration hard. And when you have 200 billion rows in one logical structure, migrating to a
+different structure later is effectively impossible. But, they're committed to this model forever.
+It makes onboarding new engineers slow. And there's a learning curve to understanding how everything
+maps to blocks. And the indirection adds cognitive overhead you internalize it. So, the block model
+is not free. It's a long-term bet. And the flexibility that you get from it is worth the cost that
+Notion is paying at every other layer. So, that is the lesson. Every powerful abstraction has an
+ongoing tax. And when you adopt an abstraction, you're not just adopting its benefits. You're
+committing to paying its costs at every layer forever. So, let's quickly recap. First, data model
+decisions outlive every other decision that you will ever make. The database is replaceable, the
+framework is replaceable, the cloud provider is replaceable. But, the shape of your data, once
+you've got a billion rows, is very difficult to change. The second lesson that we got was that
+powerful abstractions have ongoing costs that surface forever. Now, Notion's block model is
+brilliant, but they're also paying a lot of cost for permissions, for search, for encryption, and
+many other layers. And third is that when you have two different traversal directions over the same
+data, model them as two different pointer systems. Fourth is your shard key encodes your access
+pattern. So, if you pick it wrong, every query becomes problematic. And if you pick it right, most
+queries are trivial routes. Notion picked workspace, and in the Instagram video we saw that they had
+picked user ID as the shard key. The fifth lesson we saw was to separate your operational workload
+from your analytical workload. And this is the kind of thinking we go deep down in my AlgoRock
+cohort, which is 12 weeks, senior engineers only, real systems and real trade-offs. So, don't forget
+to check out the website. Okay, so in Notion's data model, everything was a block. Okay, so this is
+what the timeline looked like. Started with one block, then we had composability. We started paying
+permission tax because of using blocks. We had the two-pointer system where you had different for
+upward traversal and downward traversal. We started sharding with workspaces. We implemented data
+lake for analytics, and we're still on one block in 2026. And all of this is on Postgres. Now,
+making these deep dive videos and all these diagrams takes a lot of effort, so I wanted to share
+this video with your friends. I want you to like this video and subscribe to this channel,
+obviously. And comment if you have any questions, and I'll see you in the next video.

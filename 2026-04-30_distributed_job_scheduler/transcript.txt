@@ -1,0 +1,132 @@
+So, today we're talking about distributed job schedulers, and this is a part of a new series that
+I'm doing on intermediate-level system design concepts. Now, if you're new to system design, I want
+you to check out the system design for beginners playlist on this channel. And now I want to start
+with a scenario that every senior engineer has either lived through or will live through. So, it's
+3:00 a.m., your billing service is down, nobody knows why, the machine running your cron jobs died
+sometime around midnight, and for the past 3 hours no billing jobs have run, no invoice emails have
+been sent, and no data exports have happened. There's also been no database cleanup, and nothing,
+basically. And here's the worst part, cron did not tell you. It didn't retry, didn't alert, it just
+stopped, and you find out at 8:00 a.m. when a customer emails you asking why their invoice is
+missing. So, now you might think that there's an obvious fix to this. Run your scheduler on multiple
+machines. Problem will be solved, right? Well, that's wrong, because now you have two machines both
+trying to run the same billing job at the same time, and there'll be double charges, duplicate
+emails, and corrupted aggregations. So, you're stuck between two bad outcomes, single point of
+failure on one side, duplicate execution on the other side, and resolving that tension is exactly
+what today's video is about. And this problem is going to be resolved with a distributed job
+scheduler that has leader election, a priority queue, heartbeat-based failure recovery, and job
+deduplication. And I have accompanying diagrams to explain each of these concepts for you, so we'll
+look at a bunch of diagrams in this video. And by the end of this video, you'll understand every
+component that will make this possible and why each one exists. So, let's get into it. Now, before
+we touch any architecture, I need to set an expectation that will save you from a lot of pain.
+Exactly once execution in a distributed system is impossible. Now, I know that's a strong statement,
+so let me explain why. Networks partition, processes crash, a worker can start executing a job, get
+halfway through, and then die before it can tell anyone if it succeeded or failed. The scheduler has
+no way to know whether to retry or not. If it retries, you get duplicate execution. If it doesn't,
+you get a lost job. There is no third option. And the best you can realistically achieve is at least
+once execution with item potent jobs. Now, the implication of this is architectural. It means that
+every single job in your system needs to be designed to handle being run twice. A job that sends an
+email needs to check was this email already sent? A job that processes an invoice needs to check was
+this invoice already processed? And this is not optional, this is the price of fault tolerance. Once
+you accept this, everything gets simpler. You stop trying to build a scheduler that guarantees
+exactly once, because that's impossible, and you start building one that minimizes duplicate
+execution while handling failures gracefully. Now, that's the mental model. Keep it in mind for
+everything that follows. So, I want you to look at this diagram. This is what happens when your
+single node scheduler dies at 3:00 a.m. The scheduler process is gone, the workers are still
+running, they're waiting for triggers, but the triggers never come. Jobs back up, nobody notices
+until morning. There are actually three distinct ways a single node scheduler fails, and they each
+need different design responses. Failure mode one, the dead scheduler. The machine dies, jobs don't
+run. This one is obvious. The fix is multiple scheduler nodes with leader election. Only one of them
+runs at a time, but the others are ready to take over. Failure mode two, the slow job. A job is
+scheduled every 5 minutes, one run takes 7 minutes, the next scheduled run starts while the first is
+still in flight. Now, you have two instances of the same job running concurrently, and the fix is
+job locking with heartbeats. A running job holds a lock that prevents rescheduling until it
+completes. Failure mode three, the lost job. The scheduler triggers a job. The worker crashes after
+starting but before completing. The scheduler thinks it's done because it got an acknowledgement, no
+retry happens, the job is just lost. And the fix is heartbeat-based progress tracking. A job is only
+marked complete when it sends a completion signal, not when it starts. So, we just discussed three
+failure modes. There will be three different fixes. So, a good distributed scheduler needs to handle
+all three of these. So, let's look at the solutions now. So, let's talk about this diagram. You have
+three scheduler nodes, A, B, and C. Only one of them should be making scheduling decisions at any
+given point of time. In this case, node A is the leader. Nodes B and C are just hot standby. They're
+just watching, waiting, ready to take over the moment node A disappears or fails. And how does this
+work exactly? It works through a distributed lock stored in Redis or etcd. The leader holds the lock
+with a TTL, a time to live. In this diagram, you can see node A holding the lock with a 30-second
+TTL, and renewing it every 10 seconds. Node B and C are both sending heartbeats to the lock store,
+checking if the lock is available. Now, if node A dies, the lock expires after 30 seconds. Node B
+and C race to acquire it. One of them wins. The new leader starts scheduling job. The gap between
+the crash and the failover is the lock TTL. Here's the key implementation detail. When you write
+this in code, you use Redis's set command with the NX flag, and it gets set only if it does not
+exist, and that's your atomicity guarantee. Only one node can win the race, it's one atomic
+operation. Now, there's a critical subtlety here that a lot of implementations get wrong. When a
+node loses its leadership, when the renewal fails, it must immediately stop scheduling. A node that
+thinks it's still the leader while a new leader is being elected will cause duplicate job execution.
+A node that thinks it's still the leader while a new leader is being elected will cause duplicate
+job execution. So, this state transition has to happen before any further scheduling decisions are
+made. So, to summarize, what's happening in this diagram is that node A is the active leader,
+holding the Redis lock and scheduling jobs. Nodes B and C are watching the lock, ready to acquire it
+the moment it expires. The lock TTL is your failover latency. Keep it short, but not so short that
+network blips cause unnecessary leadership changes. Now, leader election solves the two schedulers
+running simultaneously problem, but it doesn't solve a different problem, the same job being
+triggered twice by the same leader. Look at this diagram. On the left, you have the first job
+submission coming in. It creates an execution record in the database and gets queued. On the right,
+a second submission for the same job comes in, maybe because of a clock skew, maybe a network entry,
+maybe a race condition in your scheduling loop. It then hits the database, finds the record already
+exists, and gets silently dropped. That's the on conflict do nothing clause doing its job. So, the
+mechanism is an item potency key, a unique identifier per schedule execution. You generate this by
+hashing the job ID together with the schedule time window. The time window is important. You want to
+deduplicate within a scheduling period, not forever. The same job should be able to run again in the
+next hour's window. You're just preventing it from running twice in the same window. Now, check out
+this diagram. Four lanes, critical, high, normal, and low. Workers always drain critical first. If
+critical is empty, they move to high. If high is empty, they move to normal, and so on. And this
+matters because without priority queues, your billing job, which is critical, can end up behind 500
+low-priority thumbnail generation tasks that all got queued at the same time after a backlog
+cleared. In a flat queue, arrival order is everything, whereas in a priority queue, importance is
+everything. The implementation uses a single jobs table with a priority column and a clever order by
+in the worker poll query. Workers use for update skip locked, which means multiple workers can all
+be polling the queue at the same time without contention. Each worker atomically locks the row it
+picks up, so no two workers grab the same job. Now, let's look at what's happening in this diagram.
+Worker B is running a job. It dies mid-execution, machine failure, network partition, doesn't
+matter. The job is half done. The database record still says status is equal to running. Nobody's
+ever going to set it to completed or failed. It's stuck. Now, the worker C is waiting, which is the
+watchdog. The watchdog is watching, and here's what happens next. The watchdog, separate process
+that runs every minute, scans the jobs table looking for rows where status is running but last
+heartbeat is older than 60 seconds. Worker B's job hasn't sent a heartbeat ever since it died. The
+watchdog finds it, resets its status back to pending, increments the attempt count, and reschedules
+it. Worker C picks it up and finishes the job. And this, essentially, is the heartbeat pattern.
+While a job is running, the worker sends periodic updates to the database, just a timestamp every 10
+seconds. The watchdog's timeout is 60 seconds, which means the worker can miss five heartbeats
+before being declared dead. That gap is intentional, you don't want to prematurely kill a healthy
+worker that's just slow on a particular execution. So, now I have a schema for you where everything
+comes together. The jobs table has your standard fields, ID, name, payload, priority, status, but
+the interesting columns are the operational ones. So, there's this column called run at, which
+defines when to run next. For cron jobs, this gets recalculated after each execution. Then you have
+cron expiration, which is null for one-off jobs, and it's populated for recurring jobs. Then you
+have attempt count and max attempts, this is your retry budget. When it hits max attempts, the job
+goes to dead letter. The worker ID shows which worker is currently running this job. Last heartbeat
+is a critical column for failure detection. And then there are two partial indexes. The first covers
+the worker poll, which are pending jobs ordered by priority and run at. The second covers the
+watchdog, running jobs filtered by last heartbeat. Both are partial indexes on their respective
+status values, which means they stay small and fast because they only index the rows that match. And
+this schema handles millions of jobs per day. Now, I want to be honest about where this architecture
+actually breaks down, because every tool has its limits. If you have a job that takes 4 hours and
+has multiple checkpoint stages, retrying from scratch on failure is expensive. And at that point,
+you might want Temporal or AWS Step Functions. They're designed for durable multi-step workflows
+with fine-grained checkpointing. And if a job spawns 10,000 subtasks, waits for all of them, then
+aggregates the results, you need workflow primitives that a simple job queue does not have.
+Temporal, again, handles it quite well. When your job is really a sequence of API calls to external
+services with compensating transactions on failure, you're in saga territory. That's a different
+abstraction entirely. But for everything else, like scheduled cron-style jobs, background processing
+pipelines, retry with back-off tasks, this purpose-built distributed scheduler we just built handles
+of jobs per day without exotic infrastructure. The leader election that we just saw adds one Redis
+call per heartbeat interval. The watchdog is a polling query. The total operation surface is very
+small. Now, the hardest part of building this isn't the engineering. The code is actually pretty
+straightforward once you understand the concepts. The hardest part is accepting that exactly once
+execution is off the table. Designing every job to be item button from the start. And building the
+observability to catch duplicate executions before anyone notices the downstream effects. Now, if
+you want to go deeper into this, I have written a full article with all these diagrams. It's on my
+website algorok.io. I'll put the link in the description. I also have a recurring advanced system
+design cohort for senior engineers who want to move into staff engineering and principal engineering
+positions. So, if you're preparing for such interviews or just want to level up your architectural
+thinking, you're most welcome to sign up the form and we'll see if you're a good fit. If this video
+was helpful, please like the video, drop a comment with your questions, and I'll see you in the next
+one.

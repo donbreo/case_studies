@@ -1,0 +1,327 @@
+Slack looks like a simple chat app. You type something in a channel and your colleagues see it, and
+then you get a notification. But despite all this, it is one of the most complex real-time systems
+operating at scale. And at its peak on a weekday, it opens over 5 million websocket connections
+simultaneously. So, that's 5 million active customers. And each of these clients only needs the
+right events, as soon as something new happens. To make all of this look instant and simple, Slack
+had to build a few things from scratch. And that's what fascinates me most about this video. They
+created a cache on the edge called flannel that does more than just respond to requests. It actually
+sits in the middle of your active connections and watches for events coming into your application
+and adds additional data to the events that your application may need, before the application even
+requests them. Now Slack has become so big in many data centers and cloud providers that they have
+actually written their own encrypted global network from scratch. It's a system called Nebula that
+now runs on every server they own, and they later even opened up its source code. Slack also has a
+very well-known glitch, which we'll walk through step-by-step in this video, involving a stuck task
+queue. So they couldn't add any new tasks or delete old ones. This is very interesting, and it's
+something I'll cover near the end of the video. So, those are three really interesting and fun
+things that we're going to discuss in today's video . So I ask you not to stop watching the video
+without understanding these three things, because there is so much knowledge here that you can use
+in your own system design once you understand them. Now all the things they created exist to solve
+only two problems. The first is delivery. When a message comes in, you have to find exactly which of
+those millions of client connections should receive that message, and then send it to those specific
+clients. The second is loading. When you open Slack in the morning, it should quickly load your
+entire workspace with every channel, every colleague, and every unread message. And all of this
+should load very quickly. If you have a team of five people using Slack, it doesn't take much time.
+But for a company with 100,000 employees that uses Slack as its primary means of communication,
+simply opening the app adds up to hundreds of megabytes of storage with all the new messages, all
+your channels, and all your colleagues. But we'll get to all of that in a minute. Almost everything
+we’ll talk about today is taken from Slack’s own blog about engineers and two talks by their
+infrastructure engineers Mike Temer and Bing Wei. I've compiled all this publicly available
+information into these beautiful charts, and it's going to be a very visual video. So stay tuned
+until the end, because the most important parts are about the custom technology they created, namely
+Flannel and Nebula, and you don't want to miss that. The entire Slack platform is organized around
+the concept of a workspace. Your workspace is essentially a sealed box. Your channels, people,
+messages, and files are all inside this box. In Slack, this work environment is called a team. A
+workspace is a unit that Slack stores, caches, and routes. This allows Slack to view the work
+environment as its fundamental unit of organization. This boundary proves incredibly useful, and
+even the large-scale infrastructure decisions that Slack had to make, such as data sharing, become
+easier because the system rarely needs to communicate or coordinate across these defined workspace
+boundaries . So the idea is that you will have your own work environment and you will never have to
+coordinate with someone else's work environment . And they were defined as the boundaries of the
+workspace, and they essentially defined all the decisions that Slack made. When you open Slack, the
+client needs two things. First, it needs the current state of the workspace, i.e. users, channels,
+memberships, number of unread messages, and anything else needed to render the application. Second,
+it needs a live stream of updates so that new messages, reactions, and channel changes appear
+instantly. The standard solution is simple. Get a snapshot of the current state, then subscribe to
+the change feed. And Slack did just that. The client requested the snapshot using an API called
+RDM.start and then established a websocket connection to receive all subsequent updates. So imagine
+it like this. The snapshot gave you the state of everything as it existed at the moment. And the
+websocket transmitted everything that happened after that . And that's exactly what websockets do.
+They support connections to receive updates. Initially, this system design choice worked very well
+because the snapshot was small. But then the problem started when the snapshot grew along with the
+company. Each new employee adds another profile. Each new channel adds more metadata. Each
+membership setting, number of unread messages, and workspace increased the amount of data that had
+to be sent before the client could become available. Ultimately, opening Slack meant downloading
+information about the entire organization, not just the small part of it that you really needed. And
+this meant that for a company of 10,000 people, the payload had already grown to tens of megabytes.
+and in some cases even hundreds of megabytes, as for the largest organizations, clients were
+downloading around 100 megabytes before they could complete the download, and spent additional time
+parsing the response and building local state. The size of this data is already painful enough, but
+time makes it worse. Think about what happens at 9:00 AM when the entire company starts work, or
+when a network outage disconnects thousands of customers and they all reconnect together. Every
+client requests the same huge snapshot almost simultaneously. The result is what is called a
+reconnect storm, where thousands of machines simultaneously request the backend to generate and send
+some of its largest responses just when the system is already under load. The fundamental idea
+behind this is not wrong. Slack still needed a snapshot and a stream of real- time updates. The
+problem was that the image had become too large to be viewed as a single object. And solving this
+problem led Slack to one of the most important architectural changes in its history. The fix was a
+service that Slack created, and they called it Flannel. And they named it Flannel because that day
+an engineer was wearing a flannel shirt when he needed a name. Flannel is a cache on the periphery.
+It runs in data centers around the world close to users and keeps an in-memory copy of workspace
+metadata such as users, channels, boards. And if you remember, in the previous architecture, Slack
+came preloaded with all of that information that we talked about. But now, with this new
+architecture that uses Flannel, your Slack client loads with almost nothing and only asks Flannel
+for details when it needs them. This means that instead of downloading a giant snapshot of the
+entire workspace, the client starts with a very small state and retrieves information on demand.
+Most requests can now be answered directly from the nearest cache in a few milliseconds. But
+remember, I said that Flannel is not just a cache. It actually sits in the path of Slack's real-time
+connection, and every event going from Slack to the client first goes through Flannel. Now imagine a
+message arrives mentioning a user your customer has never seen before. Under the old architecture,
+this user profile would already be present in the startup snapshot. But with the new architecture
+that uses flanel, the client might not have loaded it yet, and flanel actually resolves the gap
+before the event reaches the client. This is your client, and as the message moves through the
+system, Flannel detects that the client is missing data that it will immediately need to reflect
+this event. Like in our case, a user profile that the customer has never seen before. So, it gets
+the missing metadata from the cache and adds it to the stream before forwarding this message to the
+client . So, by the time the message arrives on the client side, the client already has everything
+it needs to display it. So I'm sure you can now appreciate that with this they fixed the problem
+where the client was loading too much information at the beginning, which was slowing down the
+client. Now, there are a few side effects to this new mechanism they implemented, and these side
+effects go beyond performance. The original Slack clients were built with the previous legacy
+architecture in mind, where they downloaded everything. So they assumed that they already had
+information, like every user, every channel, all of it available to them in memory. But now, with
+the new architecture, you didn't have all that . So you would have to rewrite every client to
+support the new architecture, as now the data was being lazily served using Flannel. And this
+rewrite would require coordinated changes across multiple platforms and releases, essentially
+meaning that changing clients now required a lot of new work. But luckily, with Flannel you didn't
+even have to rewrite the clients, and Slack could just change the backend without any changes on the
+client side. So whenever the client expected new data that wasn't locally available , Flannel simply
+provided it before the client even realized it needed it. So existing clients continued to behave as
+if the old architecture still existed, while the underlying system or backend had moved to a
+completely different model. And ultimately, thanks to this decoupling, they were able to update
+customers much later. And this separation was extremely valuable because the infrastructure and
+customer teams could migrate independently without requiring a risky full one-time deployment. The
+results were quite impressive in a workspace of 32,000 users. The launch payload increased by
+approximately 44 times. And when thousands of users reconnect at the same time, the load is now
+absorbed by distributed edge caches rather than being concentrated on Slack's core systems . With
+the state of the workspace under control, Slack could focus on the next challenge—delivering the
+messages themselves. Now, when you send a message in Slack, you just press Enter . But a lot has to
+happen after that . A message arrives in the Slack web app, and the web app initially takes care of
+one thing – not to lose that message. Therefore, it writes the message to your workspaces database
+before doing anything else. Only after successful recording does it deliver the message to everyone
+in the channel who is online. So their principle is to save and send. If Slack sent the message
+first and the right one failed, people will see a message that officially never existed. It was on
+their screen, but not in the database. That's why, once the message is safely stored, its
+distribution can begin. And now one message has to turn into many messages, as every online channel
+participant needs a copy of that message, often on multiple devices in different parts of the world.
+This task belongs to a component called the channel server. The channel server keeps a live map of
+which clients are subscribed to which channels. So when a message arrives, it doesn't broadcast it
+to every connected user. It sends messages only to customers who have subscribed to that particular
+channel. And this is a classic publish- subscribe model. A busy channel only creates work for people
+who are actually listening to it. Then Slack avoids the second scaling trap. Let's say 100 users in
+one city are subscribed to a channel. The channel server does not send 100 copies over the long-
+distance network. It actually sends only one copy to the edge location, and the edge infrastructure
+performs the final distribution to the nearest clients. A single message processes an expensive
+long-distance connection , and copying occurs near users where bandwidth is cheap. There is one last
+detail. The channel server maintains a buffer of messages that it has received but not yet completed
+delivery. If it crashes in the middle of a deployment, these messages are not lost. So when it
+reboots, it replays the unfinished work and continues where it left off. So, a server failure in the
+middle of distribution can delay a message, but never causes it to disappear. Okay, you saw a little
+dot next to everyone's name. Green means they are nearby. Empty means they are not there. This point
+is called presence. This is simply the system's way of telling whether you are currently online or
+not . The idea is simple, but it actually turns out to be one of the most difficult things because
+your status is constantly changing. When you open Slack, the dot turns green. But when you turn off
+the laptop, it becomes empty. Now multiply that by your entire company, which consists of thousands
+of people who are on and off all day long. And every flicker is a small announcement. When your dot
+changes, everyone who looks at your name needs to be told whether you are online or not. Now you can
+do it the obvious way–tell everyone about everyone. But in doing so, you overload the system with
+message overload. You're wasting a huge amount of bandwidth broadcasting colored dots, none of which
+are even real messages. These are simply events of presence. So Slack stopped broadcasting them
+altogether . Right now, you only see a few people on your screen, those in your current feed, your
+recent private messages. You don't know if someone three channels away just went dormant, and you
+don't care. So your client only asks about the presence of people in front of you. If you scroll
+anywhere else, it removes old subscriptions and picks up new subscriptions for presence events of
+new people. And this single change reduces the number of presence events reaching customers by about
+five times. And if you compare this to the previous configuration, where the presence event went to
+all people, this one obviously makes a lot more sense. This is more efficient . Okay, before we get
+into the details, I just want to take a few seconds to tell you about a cohort that I host every few
+months, and it's called the Algorok cohort. We consider advanced system design and architecture for
+a post- AI world. Typically, people who attend this cohort are senior engineers such as SRs,
+platform engineers, principal engineers, enterprise and solution architects, and V- engineers. These
+are people with work experience ranging from 5 to 26 years. And it's a great way to learn from real-
+world case studies in manufacturing. Now I want to go to the alvarog.io website, which is called
+algorq.io, and actually go over the topics that we're going to cover. We'll look at modern systems
+like how Anthropic handles LMS, and how Hugging Face handles so many sandboxes for AI models , and
+how AI together hosts so many open source models at scale. It's a 12-week program and each session
+is quite intense. Now, if you like these topics, I want you to fill out the form that opens when you
+click the “Sign Up” or “Book” button at the top. And once you fill out the form, I'll check if
+you're a good fit and we'll arrange a call with you. The live cohort that I personally teach costs
+about $2,400, but there is a huge waiting list because I can only take a few people and I only teach
+it when I have time after my main job. The recommended approach is pre-recorded sessions. It's only
+$800, and getting reimbursed from your company is very easy. If you are just starting your career
+and new to engineering, this cohort may not be very relevant to you. Therefore, you do not need to
+fill out a form. Okay, now let's get back to the video. When it comes to storage, Slack is boringly
+simple. They use plain old MySQL, but apparently they have too much data for one machine, so they
+segment it. The data is distributed across many separate databases. But the question is how to
+segment them. And Slack made one clear choice. They decided to segment by workspaces. Your entire
+company's data is stored together on a single segment. And a small lookup table remembers which
+segment contains which workspace. So, almost every query in Slack starts the same way : check which
+database this company is in. And when you go in there, everything you need is in one place. And for
+years it worked quite well. But then large firms started using Slack. For example, individual
+organizations with hundreds of thousands of people, all in the same workspace , all sending messages
+at the same time. And Slack followed the "one workspace , one shard" rule. But think about what this
+means for a shard that contains one of these large companies. It contains an entire company in
+itself. And all messages end up on this one shard. Meanwhile, nearby shards can contain several
+small teams with low traffic. And this overloaded shard is called a hot shard, that is, a single
+database that consumes much more traffic than the rest, and has nowhere to offload it. Now you can't
+split this company into two machines to offload it because the entire design of the system is based
+on the idea that one workspace is on one shard. So, what can you do? There are two answers, and both
+answers are bad. You can move workspaces from shard to shard, manually rebalancing them over and
+over again as the load changes constantly. Or you can buy a bigger machine, and then a bigger one,
+and forever chase your biggest customer as they grow. If you choose the first solution, it will
+never stop needing you, and if you choose the second , you will eventually reach your limit.
+Suddenly, the design choice that kept things simple, i.e. shard by workspace, becomes what's holding
+them back. So the solution to this situation was Vitess—a system created by YouTube that runs on top
+of MySQL and manages the sharding for you. The data is still in plain MySQL underneath , but Wittis
+handles the data partitioning as well as routing . We saw WIS in a system design video on YouTube
+just a few days ago. Now, when you do this, two things change. Your program no longer needs to know
+where the data is. It simply executes the query, and Wittis determines which shard has the answer to
+which query. Sharding logic essentially goes from your code to a layer that was created for it. And
+secondly, and most importantly, you are no longer logged into one workspace, which equals one
+database. This allows Slack to divide data into finer boundaries. This way, data from one giant
+client, even if it's from the same workspace, can now be distributed across many shards, instead of
+overloading a single shard. And all data is rebalanced without rewriting the sharding logic in the
+application. So it's effectively the same MySQL underneath, but we just have a smarter layer on top
+that decides where each row goes. So, to effectively scale their application, they moved from coarse
+fixed sharding for each team to fine-grained sharding with tests. So now we've discussed storage
+properly, I think, and now we need to talk about background work, which is basically the tasks that
+run after a message is sent and delivered, and one of them even took down Slack, and it's an
+interesting story. Think about what happens when you send a message or paste a link in Slack. It
+appears instantly, does n't it? But behind this instant reaction, there is still a lot of slower
+work to be done. Slack needs to preview this link, decide whether to send a notification to
+everyone, index your message so search can find it later, and perform security checks. And none of
+this happens instantly . And if Slack made you sit and wait for your message to appear, the app
+would seem slow. So he doesn't do it. Slack shows you the result immediately and moves slow work to
+the background to be processed after some time. So it sends these tasks to the task queue, and this
+creates a backlog of tasks, and the pool of executors has to go through all these tasks in its free
+time after you've already moved on to another one. The first version of this queue in Slack ran on
+Reddis. Reddis, as you know, is an in-memory storage. It stores everything in RAM, and that makes it
+very fast, which is exactly what a queue needs . But also RAM is limited, and in 2016 this queue
+caused a crash. Now these background tasks need a database to do their work. So when the database
+slowed down, the workers slowed down with it, and tasks began to execute more slowly than new ones
+arrived. And when tasks arrive faster than they are sent, a queue forms, the queue begins to grow.
+And this is where the part in memory becomes dangerous. Each task in this growing queue is in RAM. A
+larger queue means more memory usage. And the queue continued to grow. The memory continued to fill
+up until Zis simply ran out. And at the moment when the RAM was running out, Reddis could not accept
+new tasks. This in itself is a loss of data. The real work that should have been queued is simply
+dumped on the floor. And that's not the part that reduced the load. This was something different.
+Given the specific data structure on which they built the queue, removing a task from the queue also
+required some memory. And there was no memory left. So the line got stuck in both directions at the
+same time. She could not accept the new task. And she couldn't let go of the old assignment. So it
+was full and blocked. And there was no room to free up space, i.e. delete or move these tasks. And
+with tens of thousands of tasks per second, there was no clean output. So the two errors actually
+overlapped . The first was that removing a task from this queue also caused a certain amount of
+memory usage. So the lack of memory blocked even output, not just input. And the second was that the
+data structure they chose made removing one task from the queue an O operation. This meant that the
+longer the queue became, the slower each removal became. So clearing the lag became more difficult
+at the very moment when the lag was greatest and speed mattered most. The fix was to put Apache
+Kafka before disk. Kafka, as you know, is a durable log that writes to disk because it stores its
+data on disk, not in memory. It can maintain a huge backlog without running out of space. So the
+very thing that broke Reddis is what Kafka was designed for. So now the tempting move here is to get
+rid of Reddis completely and just do everything on Kafka. But Slack is smart. They didn't do it .
+That's because Kafka is a journal. It is good at streamlining the flow of events, but it is bad at
+doing the actual work of the queue, i.e. scheduling individual tasks and ensuring that the same task
+is not executed twice. And Reddis was already good at this . So rewriting all of this for Kafka
+would be a big risk with no real benefit. So they made a small change. Instead, they left Red to do
+what it does best, which is get the job done, and placed Kafka in front of it solely as a long-
+lasting buffer. So Kafka keeps a record of each job, while Reddis keeps the jobs that are currently
+being worked on, and they created two small Golang services that connect them. One of them writes
+incoming tasks to Kafka. Another reads jobs from Kafka and pushes them to Reddis, and it marks a job
+as done in Kafka only when that job is safely in Reddis, so that nothing is ever left unrecorded in
+between. Because the failure of 2016 cannot happen again, because if Reddis overflows or has a bad
+moment, tasks are not reset; they just wait safely on disk in Kafka until Reddius is ready for them
+again. Reading all their blogs, I found it interesting that Slack uses tens of thousands of servers
+spread across several different cloud providers in dozens of locations, and all of these servers
+must communicate securely with each other, and each host must be able to communicate encrypted with
+every other host, even when they are in different clouds; and that's a complex problem in itself,
+and none of the off- the-shelf solutions solved it the way Slack needed to. So they created their
+own network system for it. They named it Nebula and later also opened its code. Nebula is an
+encrypted overlay grid, and I'll explain it here if you don't know what that means. So let's start
+with how the machine is addressed. Each host receives a certificate, which is a signed identifier
+that links three things. Its name, the only flat IP address on the overlay, and the group it belongs
+to. This flat IP address is the useful part. You can contact any machine anywhere at this one
+address. So there's no need for routing tables and keeping track of which cloud it's in . The
+overlay hides all of this. But if there are no routing tables, how does one host find another host?
+He asks this to something called a beacon, which is a lightweight detection node whose sole job is
+to know where everyone is right now . Think of it as the starting nodes in a torrent. The beacon
+does not transmit your traffic. It simply tells the two hosts how to find each other. And once they
+find each other, say, through GCP via AWS and their own data centers in Asia, the two hosts can do a
+handshake. This uses the Noise protocol framework, the same key exchange design as Signal. And this
+design choice matters because they didn't want to invent their own encryption. They just want to use
+what is proven. And after the handshake, traffic flows directly between the two hosts through an
+encrypted peer-to-peer UDP tunnel. It does not go through any central server. Even hosts stuck
+behind NAT, i.e. machines that have virtually no direct access to a public address, can connect
+using Lighthouse. Nebula now runs on every Slack server, and it's a widely used open source project.
+So a company whose job is to connect people ended up building a global encrypted network to connect
+computers because nothing that already existed was doing the job. So far, everything has been based
+on the assumption that a workspace is an autonomous unit, and everyone in a channel, and each
+channel in itself, belongs to that workspace. Now that the physical storage location of data in
+these workspaces has changed, the data can now be spread across multiple shards, but the assumption
+still remained the same . Now, a workspace is still a tight group of people and channels that only
+need to deal with each other. This is what made storage, caching, and branching easy to discuss. But
+two features intentionally break this, and they're some of the most difficult things Slack has ever
+built . The first is what's called an enterprise grid , and it brings together many separate
+workspaces into a single organization. So, a large company with dozens of workspaces can operate as
+a single connected hole. The second is shared channels. A shared channel places one channel
+simultaneously inside two workspaces. And sometimes these two workspaces belong to two different
+companies. So the supplier and the customer can be in the same room, even if each party has their
+own separate Slack. And once that happens, the assumptions that made everything simple begin to
+crumble. Now, if a channel is inside two workspaces, which one actually owns it? Under whose space
+vit does it fit? Especially when it belongs to both of them. And when a message enters this channel
+, whose real-time system distributes it? The participants are behind two different peripheral caches
+in two different organizations. So which peripheral cache should send messages to which
+participants, and that is the cost of a sealed block. The same limit that made storage caching and
+allocation easy is what you will have to contend with the moment the product reaches it. Much of
+Slack's later work on edge caching and the real- time layer was a return to the past and reimagining
+those pieces for a world where a channel and the people in it can span more than one workspace. The
+clean border was both a gift and a tax. So, two quick facts about this infrastructure. First, the
+core of the Slack web app is, surprisingly, a large monolith. It's just one big codebase written in
+hack, which is Facebook's version of PHP . Fast specialized parts like real- time servers, edge
+caches, task cube infrastructure, and Nebula are all built on Golang. Secondly, it is
+sustainability. Slack works in cloud availability zones . They use separate data centers that mostly
+operate independently and view their infrastructure as cells, isolated from each other. So the
+failure stays in one cell and does not spread. When an entire region or edge location goes down,
+automatic failover at the edge notices this and reroutes traffic by switching DNS. So new
+connections are routed to the next closest working location, and users simply connect elsewhere. So
+the principle here is designed for failure, but also includes a blast radius. Now let's follow the
+message's journey through Slack. This will help us put together everything we've understood so far.
+So, you type something in a channel, press Enter, and it travels over your open websocket through
+the nearest point of presence on the edge back to the Slack score. The web app writes it to your
+workspace shard , found through the metadata store hosted by Vitz. After saving, the channel server
+sends it to every online subscriber. One copy per peripheral cache, and as a message passes by,
+Flannel inserts any mentioned peer that your client is missing so it is instantly rendered. The
+background is dropping fire from the queue . Gets a preview of the link. Adds the message to the
+search index. Decides who is absent and deserves a phone message. People watching the channel see
+your words in a split second. The person who left receives a notification. And all of this continues
+to work if a server or an entire zone goes down because the failure is blocked and traffic is
+independently rerouted through Nebula, an encrypted mesh under the instant thing. Now, in the case
+study of system design, there are some interesting ideas that we can apply to our own systems, and
+some of them are non-obvious things that Slack has done. First, a cache can do more than just
+respond to requests. It can edit a live stream and pull out what the client needs before they ask,
+even allowing Slack to migrate clients and cache them on separate schedules. Second, storing a
+message and delivering it are two different tasks with two different needs. Store first, then expand
+and store the playback buffer, so a failure during delivery loses nothing. Your isolation unit is
+both your greatest victory and your most difficult wall. Workspace gave Slack pure sharding, the
+pitfall of hard sharding, and the nightmare of shared channels— all from the same choice. And you
+also got to observe boring data structures. Memory-wasting NQ and DQ turned a slow database into a
+complete failure. These are the kinds of considerations we delve into in the 12-week Algorok cohort,
+senior engineers, real-world production demolitions like this one. The link is alrog.io, it is in
+the description of this video. So, the main idea of this video is that while Slack looks like a
+simple chat app, underneath it all is a cache that overwrites data in your messages in real time.
+And there is a branching service that never loses any message during processing. And there is a
+repository that divides one client into shards. And there is a queue of tasks, rearranged around one
+brutal dead end. And there's a whole encrypted network that they wrote themselves. I hope you
+enjoyed this video. And it takes many hours to process all this information and turn it into these
+charts. I have a small team of editors and artists who help me with this. So the least you can do is
+subscribe to motivate us to keep creating content like this for you . Don't forget to share this
+video with your colleagues and friends. And subscribe to this channel. And you can also share your
+thoughts in the comments to this video. See you in the next video. Thank you.

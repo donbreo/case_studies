@@ -1,0 +1,325 @@
+To play the video you're watching now , YouTube created special hardware. They designed the chip
+specifically for video processing because, on the scale of YouTube, general-purpose processors were
+no longer the most efficient way to get the job done. And this is just one of the unusual
+engineering solutions hidden behind this platform. And this is due to the scale at which YouTube
+operates. Every day, viewers watch approximately one billion hours of video on YouTube. That's about
+5 billion unique views for over 2 billion users in almost every country in the world. At the same
+time, creators upload about 500 hours of new video every minute. Over 8 hours of video is coming in
+every second. And while you're watching this video, thousands more hours of content will be
+uploaded. And each of these videos must be processed, stored, indexed, replicated, and prepared for
+broadcast across a vast array of devices and network conditions. And all of this raises a simple
+question. How does YouTube actually work ? But the answer to this is not so simple. Most engineers
+assume that the most difficult thing is delivering a billion hours of video every day. This is
+certainly impressive, but that's not where the main complexity lies. The most difficult problem
+begins much earlier, when the creator clicks " download". Before a video can be streamed, YouTube
+must convert it into dozens of different formats, resolutions, and bitrates, distribute it
+worldwide, and make it instantly searchable by billions of users. A significant portion of
+engineering efforts are directed toward solving this problem. And in this video, we'll break down
+the entire architecture: from loading and processing to storage, databases, and global delivery. And
+everything in this video is taken from published Google articles, engineering reports, and technical
+documentation. I turned all the publicly available information into these visual diagrams. So this
+video is going to be very visual. Stay until the end to understand how one of the greatest systems
+ever created really works. YouTube does a huge amount of work only once, and that happens the moment
+a video is uploaded . Therefore, he can do almost nothing. billions of times when people press the "
+play" button. And that's the whole strategy. All the hard work is done upfront, and by the time you
+click on the video, the bytes you're about to watch have already been processed into dozens of
+versions and are already on a server a few miles from your house. Pressing the “play” button is
+actually cheap precisely because all the expensive processing has already been done. So, the
+principle here is simple. Calculate once and broadcast forever. And every design decision we'll look
+at today is aimed at making the most common use case—pressing the "play" button —as cheap as
+possible. So let's start with where the work actually begins - with the download. When a creator
+uploads a video, they upload one file, one resolution, one format—what their camera or editing
+software produced. This single file should be available for everyone to view. Here's someone
+watching on a 4K TV over gigabit fiber internet. Someone else is on a six-year-old Android phone
+with an unstable 3G connection somewhere in the village. Someone is watching from a laptop, and
+someone, perhaps even from a " smart" refrigerator. So each of these people has their own screen
+size, different bandwidth, and their own set of video formats that their device can decode.
+Therefore, you can't just save one file provided by the author and distribute it to everyone. A 4K
+file will never download on your phone. It will buffer endlessly, use up all your mobile data, and
+the small, low-quality file will look terrible on a big TV. So, one file cannot satisfy everyone.
+And therein lies the main problem. One input load and an almost infinite variety of devices and
+networks at the output. Bridging this gap is the most expensive part of the job. So let's follow the
+path of the video. So, the author clicks the " download" button. The first thing that happens is
+that the video is not sent as one huge object. A program on the user's side breaks the file into
+smaller pieces , typically 10–50 megabytes each, and downloads them. And there is a very practical
+reason for this. Downloads may be interrupted. Your Wi-Fi may disappear. You can get into an
+elevator and your phone will switch from Wi-Fi to mobile data . If you were downloading one huge
+file and it stopped at 90%, you would have to start all over again, which would be very annoying. By
+breaking the file into pieces, YouTube only has to re-upload the part that didn't make it through,
+leaving everything that has already been transferred in place. This is what people mean when they
+talk about "resumable booting." A download that can continue from where it left off. This is why
+YouTube uploads can withstand an unstable connection that would kill a single large data transfer.
+These fragments are loaded to the nearest Google edge point—the closest entry point to the Google
+network. So data doesn't have to travel a long distance to be safe inside their system. They are put
+together, and the complete original file goes into storage. After that, YouTube adds a message in
+turn, which effectively announces: "here's a new video." This needs processing, so a pool of worker
+machines monitors this queue, and one of them takes on the task. And now the most expensive part
+begins. So, you remember the problem. Every device, any bandwidth. YouTube takes the original and
+transcodes it into a whole gamut of resolutions. If someone uploads a video in 8K, YouTube creates
+about nine different versions of the resolution . 144p for the worst connections, then 240, 360,
+480p, 720p, 1080, 1440, 2160, which is 4K, and all the way up to 4320p, which is full 8K, and each
+of those is a separate video file created from that same upload. But it doesn't end with
+resolutions. Devices also differ in their opinions regarding the format, or codec—the compression
+scheme used to compress the video. Older devices only understand the old H.264 codec, newer ones can
+work with more modern and efficient codecs like VP9, ​​and the newest ones support an even better
+one—AV1. So YouTube doesn't just create nine resolution options . It makes several such resolutions
+in different codecs so that any device can find a version that it can play. If you do the math, that
+'s about 9 resolutions multiplied by multiple codecs plus separate audio tracks, and one download
+turns into dozens of separate files. The process of converting a video file from one format to all
+others is called transcoding, and it is actually very expensive. It's actually shockingly expensive.
+It's so expensive that it affects everything YouTube builds next. Transcoding, as I mentioned, is an
+extremely difficult task, and the reason lies in one compromise built into the way codecs work. The
+main goal of a codec is to make a video file as small as possible while maintaining quality, as
+smaller files mean less bandwidth, which means faster downloads and lower costs. But that's the
+catch. The better a codec compresses a file, the more computing power it requires for this
+compression. So, the smarter the compression, the more complex the mathematical calculations and the
+more CPU time you burn. The modern VP9 codec compresses much better than the older H.264, but it
+requires about five times more computation to encode. And AV1, the newest, compresses even better
+than VP9. It can reduce the file size by another 30% or so, but it is even more computationally
+expensive to create. So the formats that save the most bandwidth are precisely those that require
+the most capacity to create them. Now put that on the scale. 8 hours of new video every second. Each
+of them requires all these versions and all these expensive codecs. This is one of the largest
+computational tasks on the entire planet. But YouTube approached it from two completely different
+angles. And the first one concerns how you organize your work . Here is the first clever trick.
+Let's say someone downloads a 2- hour movie. If you were to process it the obvious way— on a single
+machine from start to finish, frame by frame—it would take forever. You would process it at a speed
+close to playback, and a 2- hour video would take a long time to load on the machine. That's why
+YouTube doesn't do that. It breaks the video into many short segments. Imagine cutting a 2- hour
+movie into a bunch of 10-minute pieces. It hands each piece to another machine, and they all process
+their part at the same time, in parallel, using a huge fleet of executors. So, instead of one
+machine " chewing" 2 hours of video, you have 12 machines, each processing 10 minutes at a time.
+When they finish, the system stitches the processed parts back together in queue order into one
+finished video. So work that would take hours is now done in a fraction of that time. But there's
+one subtle problem this creates: when you cut a video at the boundaries of fragments, the machine
+processing the part after the cut doesn't see the frames before the cut. And for high-quality video
+compression, it is critically important to see neighboring frames. Therefore, small quality defects
+may occur precisely at the joints where fragments meet. The solution is to allow the fragments to
+overlap slightly. Each fragment includes several frames from neighboring parts on both sides. This
+way the encoder gets the necessary context. And these extra frames are cut off when everything is
+stitched together. So, parallelism turns a task that would take hours into something that can be
+done quickly. But there is a limit to how far you can go by simply dividing the work. And this is
+where YouTube took radical action. Okay, parallelism allows you to achieve a lot. But around 2015,
+YouTube analyzed the trends: more downloads, higher resolutions, and all these new codecs that
+require five times more computing power. And they realized that simply increasing the number of
+regular servers would not help scale the system . Conventional processors are universal. They are
+designed to do a little bit of everything , which means they are not specifically adapted for one
+thing. And video transcoding is a very specific thing. So they did something most companies would
+never dare to do. They developed their own special chip. A silicon crystal designed to perform only
+one task: video transcoding , and nothing more. They called it the Argos VCU, a video encoding
+device. And because it's built specifically for this one task, it's significantly more efficient
+than a regular processor. We are talking about computational efficiency that is 20–23 times higher
+when considering the full cost of design, creation, and training. According to one analysis, these
+chips performed work that would otherwise have taken about 10 million processors . Each chip has 10
+dedicated encoding cores, and each core can process 4K video in real time. They place two such chips
+on a card that looks a lot like a graphics card, and then fill data centers with them. When you
+download a video today, it's almost certainly being processed by one of these special chips, which
+is the main reason why 4K video is ready in hours instead of days like it used to be. And if you
+watched my video about Dropbox's system design , this should look familiar to you, because Dropbox
+builds its own storage hardware because they understood their workload deeply enough to specialize.
+So, YouTube created its own computer hardware for the same reason. Now, before we get too deep, I
+want to take a few seconds to tell you about a cohort that I run every few months, and it's called
+the Albero cohort. We consider advanced system design and architecture for a post-AI world. And
+typically the engineers who attend these classes are senior professionals like SREs, platform
+engineers , lead engineers, enterprise solution architects, and VPs of engineering. So there are
+people there with experience ranging from 5 to 26 years. And it's a great way to learn from real
+practical examples from production. You can check out all the details on algorith.io, that's
+algor.io, and you can scroll down to see all the topics we'll cover in this cohort. We'll look at
+modern systems like how Anthropic handles LLM, how Hugging Face manages so many sandboxes for AI
+models, and how Together AI hosts so many open source models at scale. This is a 12- week program.
+Each session is a 4- hour intensive immersion. And if you like these topics, I want you to fill out
+the form that opens when you click the "book" or " register" button at the top. And once you fill
+out the form, we will check if you are a good fit for us and arrange a call with you. Right now, the
+live cohort that I teach in person costs about $2,400, but there is a huge waiting list for it
+because I can only accept a few people. If you need access to the recorded sessions, you can get
+instant access for just $800. So, if you are early in your career and just starting your journey in
+engineering, this group may not be very relevant for you. So you don't have to fill out the form.
+Okay, back to the video. We've dealt with the video files themselves, but video is not just pixels.
+Think about everything else that goes with it . The title, description , the channel it belongs to,
+the ever-growing number of views, likes, every comment and every reply to it, which videos are in
+which playlist. Your subscriptions, viewing history, watch later list—all of this is structured
+data, strings, and relationships. This is exactly what traditional relational databases are ideally
+suited for. And the relational database that YouTube turned to long ago is one you already know.
+MySQL, plain, boring, battle-tested MySQL. And if you've seen my video about Instagram's system
+design, you know exactly where this is going. Instagram scaled to hundreds of millions of users on
+Postgres, a boring relational database that everyone said didn't scale. YouTube did the same with
+MySQL. At least in the beginning, and none of them escaped to some "fashionable" databases. Then it
+got difficult. They stayed and figured out how to make a boring, well- understood tool work at large
+scales. So let's see what's broken and what they've built to fix it. One MySQL database works
+perfectly fine for a while, and then problems arise. The same thing happened with YouTube. The first
+problem is connectivity. Every time an application opens a connection to a database, it must
+allocate a portion of memory just to manage that connection. And when you have a huge fleet of
+application servers that are constantly opening connections, you can get thousands and thousands of
+these connections. And the database wastes gigabytes of memory just maintaining open connections
+before performing even a single useful action. The second problem is the limitation of one machine.
+At some point, your data and traffic simply become bigger than the largest server you can buy , and
+there's nowhere left to grow. Third is the pain of sharding. The classic answer to the limitation is
+to distribute data across multiple database servers, i.e. sharding. But if your application code
+needs to know which server contains which data, your code becomes confusing, fragile, and scary to
+change. And the fourth is fault tolerance. When a database server goes down , someone has to notice
+it, bring up a backup server, and redirect traffic . And all this should happen quickly, without
+data loss and without calls to the programmer at 3 am . These are the same problems that any
+database of this scale faces. So , YouTube hasn't abandoned MySQL. They created a layer on top of it
+that absorbs all that complexity. And this level is called Vitess. Vitess is a system written in
+Golang that sits between your application and MySQL servers, making an entire fleet of MySQL
+databases behave as one single database. Your application “thinks” that it is accessing one regular
+MySQL server, but behind the scenes, Vitess manages dozens or hundreds of such servers. It all
+started inside YouTube. It handled all of YouTube's database traffic for years, and is now an open-
+source project used by large companies like Slack, Square, GitHub, and others. It consists of two
+main parts, and it is worth knowing their names. The first is VTGate. This is the router, the "
+front door". Your application connects to VTGate as if it were a regular database. And when a
+request comes in, VTGate first determines which MySQL server or servers can respond to it and
+redirects it there. Your application doesn't need to know exactly how the data is partitioned.
+VTGate hides all of this. The second part is VTTablet, and such an element stands in front of each
+MySQL server, next to it, on the same machine. It's like a little security guard for each database.
+Let me show you exactly what it does, because three of its functions are worth looking at in more
+detail. So its first function is connection pooling, and that's a direct solution to that first
+obstacle. Instead of letting thousands of application connections "hit" directly into MySQL and
+consume all the memory , VTTablet maintains a small pool of real database connections, say around
+100, and multiplexes all incoming traffic into this pool. So you can have 10,000 connections from
+your applications, and they all go to about 100 real connections to MySQL. Database memory is freed
+up to do real work, instead of just keeping connections open. Connection pooling is one of the first
+things that really saves a relational database when scaling. And its second function is query
+security. In a huge codebase with hundreds of engineers, someone will eventually write a bad query.
+For example, a query that forgot to limit the number of rows and tries to retrieve 10 million
+records, " crashing" the entire database. So, Vitess Tablet checks requests before executing them
+and can intervene, set a limit, block a known malicious request, or abort one that is running too
+long and exhausting resources. So it's like a seatbelt for people who, with good intentions, make
+costly mistakes. And the third task is deduplication. This is a little complicated, so hear me out.
+Imagine an extremely popular video whose view count is read by thousands of people simultaneously,
+without any tricks. These are thousands of identical read requests that literally " bombard" the
+database for the same number. So here's what Vitess does. When a request comes in to read something
+that is already being received, it does not launch a second identical request. It simply makes the
+new request wait for the one that is already executing. And when the answer comes, everyone who was
+waiting gets the result at the same time. In this way, a thousand identical requests are collapsed
+into one real one. So: pooling, query safety, and duplicate read reduction. This Vitess Tablet does
+its quiet work. But Vitess has another task, and it's the most difficult of all. There is one more
+thing that Vitess does, and this is the most difficult part for any database at scale: if one shard,
+i.e. a piece of data, becomes too large or overloaded, it needs to be split into smaller shards to
+distribute the load. And the horror is doing it while the product is running, with people constantly
+reading and writing, without downtime and without losing a single row of data. Vitess automates
+this. It creates new shards, copies the data, keeping it in sync with current changes, and when
+everything is verified to match, switches reads to the new shards first. Only after it has been
+proven safe does he switch the recording. If at any stage something looks wrong, you can roll back
+and the data will continue to flow all the time. YouTube users don't notice anything at all . And if
+you look closely, it's actually the same disciplined migration pattern from my Dropbox video, where
+you copy the data, run both systems in parallel, check their consistency, and then carefully switch
+reads and then writes. Safe migration is never about tricks. It's about patience and taking each
+stage one at a time. And as we saw in the Instagram video, you separate the logical data structure
+from the physical hardware so you can scale without rewriting the code. So, Vitess is the same thing
+, but automated. So, Vitess distributes MySQL across a huge number of machines, but there is a more
+complex database problem that it does not solve: ensuring data integrity when it is dispersed across
+the planet. YouTube data is stored in data centers on different continents. That is, a copy in the
+USA, a copy in Europe, a copy in Asia. And for everyone to see the same thing, these copies must
+match the order in which the changes occurred. Which entry was the first and which was the second?
+It's easy on one machine. There is only one clock. You timestamp each change and sort by it. But on
+a global scale, every car has its own clock. So no two clocks match, and they constantly diverge by
+milliseconds. So when a recording appears in New York and another in Tokyo a little later, and you
+compare the timestamps, you can't really trust which one came first. The clocks are too far apart to
+determine this. And if you get the order wrong, the copies will become inconsistent, and someone in
+one part of the world will see one thing and someone else will see something else. The usual way to
+synchronize clocks over a network leaves an error of 100 milliseconds or more, which is not accurate
+enough. So, on a planetary scale, the database can't even agree on what time it is. So Google solved
+this with a database called Spanner. They stopped trusting regular watches. Google has installed
+real atomic clocks and GPS receivers inside its data centers. The same atomic clock technology that
+provides official world time is now found in server racks. Thanks to them, each machine knows the
+exact time, with a deviation of a few milliseconds from any other machine on Earth. Then they
+created an add-on called TrueTime. When the database asks what time it is, TrueTime doesn't return a
+single number because a single number would imply precision that doesn't exist. It returns a tiny
+interval. She says that real time is somewhere between this moment and this very moment. And thanks
+to atomic clocks, this interval is only a few milliseconds. And now the key step: when the database
+saves a record, it intentionally waits for this tiny interval to completely pass before considering
+the record complete. This purposeful waiting lasts for a few milliseconds. And by waiting for the
+period of uncertainty to end , it ensures that any subsequent record anywhere on the planet will
+receive a later timestamp. No machine ever has to ask others to tell it what time it is. So they
+trust the clock and wait. Thus, the entire planet coordinates the order of events, using time itself
+as a coordinator. The price is the few milliseconds added to each write, and it's the cost of
+maintaining data consistency around the world. And this is the same move as with the special chip
+they created. Everyone else struggled with this problem programmatically, synchronizing clocks over
+the network with additional approximations. Google decided that the best solution was to change the
+hardware and install atomic clocks in the building. Other databases later copied this idea
+programmatically, because almost no one else can put an atomic clock in a rack. When physics became
+the limitation, Google decided to change physics. Now the last element remains: how to deliver the
+video to you, the viewer. So, the finished video is stored in Google storage. If each of the 8
+billion hours had to travel from a central data server to your phone, the traffic costs would be
+huge and everything would run slower. Therefore, YouTube physically brings popular videos closer to
+you in advance, even before your request. This is a CDN, a content delivery network. And Google's
+version is called Google Global Cache. The idea is quite bold. Google creates caching servers and
+places them on the networks of Internet service providers , i.e. your ISP. The company you pay for
+your internet has Google servers on its premises , preloaded with popular videos in your area. These
+cache servers are located in over 1,300 cities in over 200 countries. So when you stream a popular
+video, the bytes usually don't cross a country or an ocean. They come from a machine a few miles
+away from you, inside your provider's network. This is why a viral video plays instantly. By the
+time you click on it, the copies are already next to the viewers. And the work of bringing the video
+to you has been done in advance. There's a good reason why an ISP would want to have Google's
+servers on-site. It all comes down to how providers pay for traffic. Getting data from outside their
+own network costs them real money. Traffic that stays within the network is cheap. Therefore, when
+Google places a cache of popular videos inside the provider's network, the provider stops constantly
+loading the same videos from outside. He provides them locally for almost free. Google calls it
+offloading, and both parties win. Google gets the video closer to the viewers, and the provider
+reduces traffic costs. That's why these cache servers are located at providers all over the planet.
+And it works quite well. They satisfy most requests locally with a success rate of around 98-99% for
+popular videos. The mechanism is simple. You are requesting a video. You first access the YouTube
+server. It checks your IP address, sees that your provider has a cache, and sends a copy to your own
+network. And if the video is not yet in this cache, a cache miss occurs. It takes the video from a
+larger, higher- level cache, serves it to you, and keeps a copy for the next user. Popular videos
+are cached in advance, while rare videos are cached only when someone requests them . There is
+another delivery detail that is especially important for mobile networks. YouTube actively uses
+QUIC— Google's transport protocol, which later became the basis of HTTP/3. To understand why this is
+useful, look at how the older TCP protocol behaves. TCP delivers data in strict order. If one packet
+is lost, the recipient is forced to wait for it before it can use subsequent packets. The next
+packages could have already arrived. It doesn't matter. Everything stops until a lost packet
+appears. It's like one broken down car blocking an entire lane of traffic. This is called head-of-
+line blocking. And this is especially painful in mobile networks, where packets are constantly lost.
+Each lost packet means a short pause. If there are many, you see a loading icon. The QUIC protocol
+was created precisely to avoid this. If a packet is lost, other data streams continue to flow while
+the lost packet is retransmitted in the background. QUIC also establishes connections faster than
+TCP, so videos start playing faster. The result is a much smoother viewing experience. Google
+reported a significant reduction in re- buffering after switching to QUIC, especially on mobile
+networks where connection quality constantly fluctuates. This is the kind of change that no one
+notices directly. You just get fewer interruptions. Now let's take a broader look, because one
+design principle runs through everything we've considered. YouTube spends a huge amount of effort
+even before a video is viewed for the first time. The uploaded video needs to be processed,
+converted to different formats and resolutions, optimized for different devices, and distributed to
+caches around the world. All this work is expensive, but it is only done once. Instead, the review
+process is designed to be as simple as possible. Therefore, when you click " play", the video is
+usually served from the nearest cache. The network path is short, and the server infrastructure
+performs a minimum of calculations. Expensive work is done once, while cheap work is done millions
+of times. And almost every architectural solution we've seen on YouTube exists to support this
+asymmetry. But there's another aspect: YouTube's library contains hundreds of millions of videos,
+and most of them are watched very rarely. Many of them have only a few views, and some are hardly
+ever watched. So it would be incredibly wasteful to fully optimize every video as if it were going
+to be the next viral hit. Therefore, YouTube spends its most expensive resources precisely where
+there is real demand. Popular videos receive wider distribution, more aggressive caching, and
+additional optimization, while less frequently viewed content is treated much more conservatively.
+So, there are five conclusions that can be drawn from this. The first is to do the expensive work in
+advance. One, to keep the usual path cheap, YouTube does the most expensive part during the
+download, so pressing the play button costs next to nothing, and the data is sent to the nearest
+cache even before you ask for it. Second—boring tools work when scaled if you build a system around
+them. YouTube processes its metadata on plain MySQL just as Instagram runs on Postgres. They didn't
+switch to a trendy database. They built and tested to make boring tools scale. The third—things like
+pooling, query safety, and running the job once—all of these concepts aren't very fancy, but they're
+what hold everything together. Group your connections so that the database doesn't get choked up
+with them. Stop bad requests before they are executed. Combine duplicate work instead of repeating
+it. Fourth—when your problem is big and specific enough, owning a stack gives you advantages that
+can't be bought. YouTube created a special chip for transcoding, and Google installed atomic clocks
+in its data centers to maintain database consistency . Fifth—when the system is deployed across the
+planet, the most difficult thing is to agree on the order in which events occurred. Google uses
+atomic clocks and spends a few extra milliseconds on each entry just to keep events in order around
+the world. Consistency on this scale is never free. You pay for it in hardware and latency, or you
+give it up . If you enjoyed this video, I have two playlists worth your attention. There is a
+beginner's system design playlist with over 50 videos covering basic concepts, as well as an
+intermediate system design playlist where you'll find more advanced videos like this one. If you
+watch both of these playlists, you'll know more about system design than almost any of your
+colleagues. And if you build real systems every day, there's a 6-hour video on microservices
+architecture on my channel, as well as a playlist for technical architects. Well, let me sum up.
+YouTube serves a billion hours of video per day, and that's only possible because it repeats one
+idea everywhere: do expensive work once so everything else is cheaper. Therefore, viewing becomes
+practically free. The system converts each download into dozens of versions, distributing the work
+between a fleet of machines and a special chip of its own design. It stores metadata in plain MySQL
+and scales with VES, pooling connections, blocking bad requests, eliminating duplication of work,
+and performing real-time resharing without being noticeable to users. And to keep this data
+consistent across the planet, Google created a database synchronized using real atomic clocks.
+Eventually, it sends the finished copies to caches inside your ISP. So the data is already waiting
+for you right next to you. Processing all this information, visualizing it in the form of diagrams,
+and creating such detailed videos takes a lot of time and effort after my main job. So please don't
+forget to subscribe to this channel, like and share this video. and see you in the next one.

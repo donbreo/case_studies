@@ -1,0 +1,373 @@
+In 2014, Facebook bought WhatsApp for 19 billion dollars. At the time, WhatsApp had about 450
+million users and a team of just 50 people and only 30 of them were engineers. So, 30 engineers for
+450 million users. Now, it's grown a lot since then. It's past 2 billion users now and more than 100
+billion messages a day. But, it grew on the same foundations which that small team had built and
+that's what makes it worth looking at. Now, the normal way to run something at this scale is
+hundreds of engineers and a sprawl of services. But, WhatsApp went the other direction on almost
+everything. I want to give you a few examples before we start. One of their servers could hold 2
+million people connected at the same time. And when you send a message, the server hands it off and
+then deletes it. It keeps no copy of anything that you say. And the messages themselves are
+encrypted end-to-end. So, the server could not read them even if it wanted to. They ran messaging
+for a big chunk of the planet on a small number of machines and a team you could fit inside just one
+room. Now, this is going to be a very fun video for you if you write back-end or infrastructure code
+because nearly everything we're taught about scaling like adding servers, adding people, splitting
+everything into services, well, WhatsApp did the exact opposite of that and it still held up. So,
+almost all that I'm covering in this video comes from the talks that their engineers gave at a
+conference called Erlang Factory and from Meta's write-up on how they later built multi-device and
+from WhatsApp's own encryption white paper. Now, this is going to be a very visual video because
+I've distilled all of that information onto these nice diagrams. So, make sure you stick around till
+the end if you want a complete picture of how WhatsApp operates. So, the idea underneath all of this
+is quite simple and it's the one thing you should keep in mind, which is you want to do more with
+less. So, you keep the server doing as little as possible and you push a single machine as far as
+it'll go and only add new pieces when you've run out of other options. And all of the things that
+the guys at WhatsApp did next, which is the strange language that they picked, one box holding
+millions of people, the server throwing your messages away, the encryption, the multi-device work
+later, all of these things that we'll discuss in this video, it all comes out of that same
+preference for fewer, simpler parts. And while most teams grow by adding more, like more services,
+more servers, more people, WhatsApp on the other hand, grew by making each part carry a ridiculous
+amount of load and keeping the number of parts small. So, let me start where the problem starts
+because a chat server is a lot harder to build than it looks. A normal web server has it easy,
+relatively speaking, because when you ask it for a page, it sends you the page, the connection
+closes, and it moves on to the next request. A chat server cannot work like that. For a message to
+reach you the instant that someone sends it, the server has to keep a live connection open to your
+phone the whole time that you're online, even when you're doing nothing and even when you're
+sleeping. Now, multiply that by everyone who has the app open and at any given moment WhatsApp is
+holding millions of connections that are mostly just sitting there idle, waiting for something to
+happen. And this is where it gets hard because at this scale every cost gets multiplied by millions.
+So, think about what a single connection normally costs you, and the usual way to handle one is to
+give it its own thread, and a thread needs a megabyte or two of memory just to exist. Now, that
+sounds tiny, but a million of them is terabytes of RAM, and you haven't even sent a single message
+yet. And memory isn't even the first wall that you hit. The operating system itself starts choking
+long before that, and that's somewhere around tens of thousands of connections on one machine. So,
+that wall is famous enough to have its own name, it's called the C10K problem, as in 10,000
+connections on a single box. And that's the bar that WhatsApp had to clear because they needed
+10,000 connections to be a rounding error because they were going for millions on one server. So,
+the cost of a single connection had to come way down, close to zero, and getting it there is
+basically the whole engineering story of WhatsApp. Now, what got them there was a language that
+hardly anyone picks. It's called Erlang, and Ericsson built it in the 1980s for telephone switches,
+which are systems that keep millions of calls connected at once and cannot go down. It runs on a
+virtual machine called the BEAM, B E a m, and the beam does two things that really matter. And the
+first one you've probably heard before. In Erlang, a process isn't a heavy operating system thread.
+It's a tiny thing that costs a few hundred bytes. So, one machine can run like millions of them. So,
+WhatsApp gives every user's connection its own little process. It runs one scheduler per CPU core.
+So, on a 24-core machine, that's 24 schedulers, each with its own line of processes waiting to run.
+And the way it stays fair is that a process doesn't get to run until it finishes. It runs until the
+system makes it stop. The beam counts how much work each process has done in small units it calls as
+deductions, roughly one per function call. And after about 2,000 of them, it pauses that process and
+moves to the next one, whether it's done or not. So, no single process can take over core, even if
+it's stuck in a loop. And that's what lets a million connections share the CPUs evenly. And it's why
+one slower broken user cannot freeze everyone else. And when one core runs out of work, it takes
+some from a busier one. So, you've got millions of these cheap processes shared fairly across every
+core, and that's what the rest of the system is built on top of. So, Erlang fits a messenger use
+case almost perfectly, and it's easy to see why, because a chat app is basically a telephone switch.
+Erlang processes don't share memory. The only way they communicate is by sending each other
+messages, which is exactly what's happening when you send a chat. So, the way the language works and
+the thing, which is the messenger that they were building, are actually the same shape. They didn't
+even write the first version from scratch. They took an existing open-source chat server written in
+Erlang called ejabberd. There was one problem with the standard chat protocol, though, and the way
+they handled it is a good lesson in building for your actual users. The protocol everyone used back
+then was called XMPP, and it used to send everything as XML, which is like angle brackets and
+repeated tag names wrapped around every single message. So, on a good connection, you'd never feel
+it, but WhatsApp was growing fastest in places like India, Brazil, and Indonesia on 2G and 3G
+phones, where every byte costs the user real time and money. So, they built their own stripped-down
+binary version of it, and it's called Fun XMPP, that replaces all that repeated text and short
+binary codes. So, it's the same information, but far fewer bytes going over the network. So, when
+your users are on the slowest networks in the world, making the protocol itself smaller is a real
+feature. Now, by 2012, the team had set a target: get a single server to hold a million live
+connections. They were starting from around 200,000 live connections, and they kept getting knocked
+over. A big football match would end, or an earthquake would hit, and suddenly everyone messaged at
+once, and the server fell over. And then, they pushed past a million, then they got to 2 million,
+and one day in February, almost by accident, a single server peaked at 2.8 million connections at
+once, moving more than half a million packets a second and over 200,000 internal messages a second,
+all on one box. But, the interesting part is not the number, it's what they said it took to get
+there. The entire climb from 200,000 connections all the way to 2 million, every single fix was the
+same kind of fix. Not better algorithms, not new features, they were hunting down contention the
+whole way up. And contention is just the technical word for things getting in each other's way. For
+example, processes waiting on each other instead of doing the work. And here's why it takes over at
+this scale. So, there are two forces at play. The first is multiplication. So, every tiny per-
+connection cost gets multiplied by millions. So, something that's completely free at 10,000
+connections becomes your entire bottleneck at 2 million connections. The second is sharing. Anything
+in the system that's shared, like a lock, a counter, a single table that everything reads and writes
+from, turns into a pileup because millions of processes are all reaching for that one thing at the
+same moment, and they end up standing in the line for it. So, scaling this wasn't really about being
+clever, it was about finding every per-connection cost and every shared thing, and then grinding it
+down one by one. So, let me walk you through a few of these so that you get a good idea about how
+this works. So, now we'll be talking about some fixes that the team at WhatsApp did and you'll spot
+the same pattern in each of these fixes, which is that when there's something cheap and it's done
+millions of times a second, it turns expensive. So, the team at WhatsApp and sit down and they try
+and make it cheap again. So, take the example of the clock. Now, at the scale that WhatsApp
+operates, the server is actually asking the operating system what time it is because it needs it for
+timeouts, for bookkeeping, and it's doing this a millions of times a second and it turns out that
+one tiny call is actually surprisingly expensive. So, they switched to reading the time straight off
+the CPU instead, skipping the operating system entirely and a big chunk of the cost just vanished.
+Now, the next is the kernel because every time a packet comes in, the kernel has to figure out which
+of the millions of open connections it belongs to. And it does that with something called as a
+lookup table. So, with 2 million connections, the default table was far too small, so two lookups
+were colliding and slowing everything to a crawl. So, they made the table much bigger and they made
+it around half a million slots. So, each lookup landed cleanly and they stayed fast. Then comes
+memory. Now, the CPU keeps a tiny cheat sheet of where things are in memory so it can find them
+quickly. And with a few hundred gigabytes in use, that cheat sheet was way too small to cover it.
+So, the CPU kept missing and having to do the slow lookup over and over again. The fix for this was
+quite simple. The system hands out memory in much bigger chunks. So, each entry on that cheat sheet
+covered far more ground and the misses dropped off. Now, after all these fixes, they went down into
+the Erlang virtual machine itself. So, we talked about the BEAM, b e a m, which is the engine
+running underneath all of this. So, they made two fixes there. The first, they bumped the BEAM's
+priority with the operating system so it always got the CPU ahead of any random background task on
+the server or the box because you don't want some housekeeping job grabbing the processor while 2
+million people's traffic waits behind it. Second, they found the beam wasting CPU in an odd way when
+part of it ran out of work for a moment, instead of resting, it would sit there spinning actively
+burning the processor checking again and again for something to do. And at this scale, all that idle
+spinning added up to real waste, so they turned that down as well. And then there were some Erlang
+specific fixes, which are the most interesting to me because these weren't exactly bugs. They were
+completely ordinary textbook ways of writing Erlang that just happened to have a hidden lock buried
+inside them. Now, you remember what a lock is, it's something only one process can hold at a time,
+and it's perfectly fine when a few processes occasionally want it, but it's a disaster when millions
+of them want it at once because they all have to stop and wait in line for their turn. So, let's
+talk about the first fix. Now, in Erlang, there's a totally standard feature where you link two
+processes together so that if one of them dies, the other one gets notified. And everybody does
+this. It's how you keep tabs on whether something is alive or not. Now, the problem was that the act
+of setting up that link leased for one single global lock, just for a moment, but still. So, it was
+harmless once, but with millions of connections all setting up links, every one of them was grabbing
+for that same one lock, and they piled up behind it. So, WhatsApp switched to a different lighter
+way for one process to watch another one, and one that did not touch that lock at all. Now, here's
+the next Erlang specific fix that they made. Now, all the live state that they needed, like who's
+connected where, lived in big in-memory tables. But each table was a single shared thing, and every
+one of the millions of processes was reading and writing the same tables at the same time, so it
+became a brutal hotspot, and everything bottlenecked on that one table. Now, the fix was to take
+each table and chop it into many smaller pieces so that different processes end up touching
+different pieces, and they stop landing on top of each other. And all of this wasn't just inside one
+machine, even the database load down for the same kind of reason. When it copied data over to the
+other servers, it pushed everything through one single stream, so they split that as well. So, they
+started running a separate stream per table instead of forcing it all down just one single pipe.
+Now, all of these fixes was a lot of work, and none of this is glamorous work. And I took all of
+this information from a write-up where they call it dark and grungy. And that feels about right
+because when you stack up dozens of fixes like these, and the same hardware goes from 200,000
+connections to nearly 3 million, that's how a team this small kept account and also their bid so low
+at the same time. So, there's just one more piece we need to talk about that turns all of these
+connections into an actual network instead of just a big heap of separate sockets sitting next to
+each other. Now, here's the problem. When you send a message, it lands on whatever server happens to
+be holding your connection. But, the person you're sending it to is almost certainly connected to a
+completely different server somewhere else in the fleet of hundreds of these servers. So, between
+your socket and theirs, there is a gap, and something has to bridge that gap. Your server has to
+find the one machine out of hundreds that's holding the other person's connection right now. Now,
+WhatsApp does that with the help of a registry. It's a distributed registry that tracks for every
+single user who's online, which server, and which process is holding the connection at this moment.
+So, the full path of a message is that it arrives at your server, your process looks the other
+person up in that directory, finds the exact server holding them, and hands the message across to
+it. And that server pushes it down the connection to their phone. And all of that happens in a
+blink. Now, multiply that by the whole planet across the cluster, hundreds of machines, and
+thousands of cores, this lookup and handoff is happening tens of millions of times a second. And at
+the busy end, it meant that the system was moving more than 70 million of these internal Erlang
+messages every second just shuffling chats between servers. So, the one process per connection thing
+we talked about was fully half of the story. The other half is this routing layer, which works
+underneath it. And this is the thing that lets any of the millions of connections reach any other
+anywhere in the fleet instantly. So, this registry is how anyone finds you in WhatsApp. So, once a
+message is routed to the right server, what does that server actually do with it? Actually, it does
+as little as it possibly can. So, the main thing is that it doesn't keep your chat history at all.
+If the person you're messaging is online, the server pushes the message straight to them and
+immediately forgets it. If they're offline, it holds onto the message in a queue and it's stored in
+Erlang's own built-in database, and it just waits, and the moment that person reconnects, it
+delivers the message and then deletes it. Once it's been handed over, it's gone from WhatsApp
+servers for good. This is something called a store and forward, and it works exactly like a post
+office. The post office carries your letter to the other person and hands it over, but never keeps a
+copy of what you wrote. The server is a counter, not a filing cabinet, and that one choice is a huge
+part of why the storage footprint stayed so small for so many users, because the messages are
+constantly passing through and leaving instead of piling up forever. Now, here's something very
+interesting. Photos and videos do not even travel that path we talked about for messages. And the
+way they handle photos and videos is a trick that you can borrow for your own systems. Now, when you
+send an image, it does not go through the messaging system at all. Your phone encrypts the image
+first, then uploads that scrambled file to a separate ordinary storage service off to the side, and
+the only thing that actually travels through the chat channel is a tiny pointer, which is a link to
+where the file lives, and the key to unlock it, and also a fingerprint of the contents of the file.
+The other person's phone reads that pointer, downloads the file from the storage, and decrypts it.
+And that fingerprint does something clever, because it's calculated from the file's actual contents,
+the exact same file always produces the exact same fingerprint. So, when some meme gets forwarded by
+a million people, WhatsApp can see every copy carries the same fingerprint, so it recognizes that
+it's all one identical file, and it stores it a single time instead of million times. And this is
+how the chat bot stays small and fast carrying nothing but tiny pointers of the images while the
+heavy files ride a completely separate track. This also explains those little check marks which line
+up exactly with what the server is doing. One grey tick means the server has your message, two grey
+ticks means it actually arrived on the other person's phone, two blue ticks means that they've
+opened the chat and seen it. So, you're basically watching your message move through its stages with
+a small confirmation coming back to you at each stage. And all of that is happening on a server
+that's about to delete the message. It just holds on to just enough information to know whether the
+thing has been delivered and whether it needs to try again. And once that's sorted, it lets it go.
+Okay, now before we go any deeper, I want to take a few seconds to tell you about a cohort that I
+teach personally to 15-20 senior engineers every few months and it's called the AlgoRock cohort. We
+cover advanced system design and architecture for the post-AI world and other advanced topics. Now,
+usually the people who attend are senior engineers like SREs, platform engineers, principal
+engineers, enterprise and solution architects, and VP engineers. So, there are people all the way
+from 5 years to 26 years of experience and this is a great way to learn from actual production case
+studies. Now, the next cohort starts in July and I want you to go to the website algorock.io which
+is algorock.io and go through the actual list of topics that we're going to cover in this cohort.
+We'll be covering details about how to scale up modern systems like how Anthropic handles LLMs and
+how Hugging Face handles so many sandboxes for AI models and how Together AI hosts so many open
+source models at scale. Now, it's 12 weeks, highly intense and if you like the topics that we're
+going to cover then I want you to hit the reserve or the enroll button and fill up the form that
+opens up when you hit this button. Once you've filled up the form, I'll check to see if you're a
+great fit and then we'll set up a call with you. The live cohort taught personally by me is $2400
+and if you just want to access to pre-recorded videos, that's $800. Now, if you're early on in your
+career and you're beginning with engineering right now, this cohort might not be very relevant to
+you so please don't fill up the form. All right, so how does a team of just 50 people keep something
+this big running without living on call around the clock? A lot of it comes down to another Erlang
+idea, and the first time you hear it, it sounds very irresponsible, and it's called let it crash.
+Now, in most programming languages, you write careful code that tries to catch every possible error
+so that the program never fails over. But, Erlang takes the opposite view. If a process hits
+something it didn't expect, you let it just die, and you have another process called a supervisor,
+which notices the failure right away and then starts a fresh one in the place of the failed process.
+And, this happens in milliseconds. Now, these supervisors are arranged in trees, so they're watching
+the workers and watching each other all the way up, so that when one person's connection process
+dies, it affects that one person for a fraction of a second, and the supervisor has already replaced
+it before anyone notices. So, the system repairs itself without a human involvement. And, a system
+that fixes itself is the real reason a handful of people could run something this size without a
+huge team. Now, holding millions of long-lived connections creates another problem. How do you
+update the software? Normally, shipping new code means restarting the program, but if you restart a
+WhatsApp server, you've just dropped every connection it was holding. So, millions of people knocked
+offline at once, all reconnecting at the same time. So, you'll be causing a small outage on every
+release. But, Erlang handles this as well, again because phone switches had the same issue. They
+can't go down to get updated. So, the beam can replace code while it's running. You load a new
+version of a module into the live system, and the processes shift over to it without losing their
+connections. So, WhatsApp could push out changes on a system holding millions of open connections
+without dropping a single one. So, it's the same story as before. They didn't have to build this on
+their own. It came with the runtime because the runtime was made for systems that update while they
+run and never stop. Now, the overall way that this scaled goes against most people's instincts, too.
+The modern reflex, when you need more capacity, is to spread out, so you have more servers, more
+services, basically a bigger fleet. But, WhatsApp went the other way. They made one machine do as
+much work as it physically can. So you remember those 2.8 million connections per boxes? That's how
+they were running as few of the machines as they possibly could. So WhatsApp was only adding more
+machines only when they truly could not keep up. And the reasoning was straightforward. Every
+machine you add is one more thing that can break and one more thing to run and one more thing to
+think about at 3:00 in the morning. And for the longest time they ran all of this on their own bare
+metal servers in a data center on FreeBSD rather than renting from a cloud. Partly for the
+performance, but partly also because owning the whole stack from top to bottom let them tune it the
+way that we have talked about up until now. And the bit of coordination they needed between all
+these machines leaned on things that Erlang already gave them. So they didn't have to build a tower
+of extra services bolted on top. Now there's one more detail that I want to cover which is how your
+phone stays connected to the WhatsApp servers. Now your WhatsApp app keeps a single connection open
+to WhatsApp the whole time. So the server can push things to you the moment they happen instead of
+your phone constantly checking. So there are these small heartbeat signals that keep that connection
+alive across patchy mobile networks and when it drops the app reconnects and pulls down whatever it
+missed. But there's a catch that comes from the phone itself. Now to save battery the operating
+system shuts your app down when it's in the background. And a shut down app cannot hold a connection
+open. So WhatsApp actually relies on the phone's own push system which is Apple's on iPhones and
+Google's on Android to send a small signal that wakes the app up and then it reconnects and grabs
+your messages. The open connection is what makes things instant while you're using the app and push
+is the backup for when the phone won't let the app stay awake. WhatsApp turned on end-to-end
+encryption for every user at once which at the time was the biggest rollout of end-to-end encryption
+that had ever happened. So this is somewhere around a billion people in one go all of them having
+end-to-end encryption. And they did this using the Signal protocol, which is the same encryption
+behind the Signal app. Now, the privacy side of this is the part that everyone talks about, but
+there is a system design side sitting right underneath it that's just as good. Now, encryption made
+the server even simpler, which again is the direction WhatsApp always wanted to move in, and your
+message gets locked on your phone and can only be unlocked on the other person's phone. So, the
+server in the middle cannot read any of the messages, and all it ever sees is scrambled data. So,
+the job of the server got even smaller. Now, it was down to just passing along sealed envelopes that
+it has no way of opening. Now, coincidentally, the thing that protects your privacy also happens to
+make the architecture simpler in this case, because the less the server knows, the less it can get
+wrong, and the less there is to leak. Now, the way the encryption works is quite straightforward.
+Every device has a long-term identity key. Think of it as a device's permanent name in cryptographic
+terms. So, when you start a conversation with someone, your two phones run a short exchange using
+some public keys that the server is holding for each of you. And out of that, they both arrive at
+the same exact secret key without that key ever being sent anywhere. And from then on, the key
+changes with every message, so each message is locked with a fresh key that gets thrown away
+immediately afterward. Now, this is a very basic form of encryption called the double ratchet. If
+you don't know how encryption works, there are some videos on the different forms of encryption in
+my beginner system design playlist, so make sure you check them out. Now, the result that you get
+with double ratchet is something called as forward secrecy. I have a video just on this topic, and
+you get this because every message uses a new throwaway key. Even if someone managed to steal one,
+they could not unlock anything you sent before or anything that you send after it. And through all
+of this, the server's only job is to hold everybody's public key so that two phones can find each
+other and get started. It never sees a private key. Now, say that you've got a group chat with 100
+people, the obvious way to send one encrypted message is to encrypt it separately for each of the
+other 99 people. Since every pair of people has their own private session. So, that means that's 99
+encryptions for a single message, and it gets worse if the group grows. So, instead, WhatsApp uses
+something called as sender keys. So, each person creates one key of their own and shares it with the
+group a single time. And after that, when you send a message, you encrypt it once with your key and
+send that one sealed copy to everyone. So, there's just one encryption instead of repeating it 99
+times, but the cost moves somewhere else. Now, you have to manage those keys, and you have to hand
+out new ones when people join or leave so that nobody can read messages from before they arrived or
+after they left. But, the work per person drops from once per person down to just once. And this is
+what makes big encrypted groups practical at scale. Now, they had a hard problem that they did not
+solve until 2021. So, for years, your phone was the center of your whole WhatsApp setup. WhatsApp
+web and the desktop app were just mirrors. So, they showed you what was on your phone, and the
+second your phone lost signal or died, they went dark as well. The reason was the encryption. Your
+keys only lived on your phone, so only your phone could actually lock and unlock messages. And those
+other devices you were connecting to WhatsApp were not really devices, they were just windows into
+your phone. But, people wanted the real thing. They wanted to keep using the desktop with their
+phone switched off in another room. And that's a hard problem because the entire encryption setup
+assumed that one person meant one device holding the keys. So, the big difficult question is, how do
+you let four different devices all send and receive encrypted messages when none of them is the
+phone anymore? And the server still is not allowed to see anything. So, what they did was stop
+treating those extra devices as mirrors, and start treating each one as a full participant in the
+encryption. So, every device you own, like a phone, laptop, tablet, up to four companions, gets its
+own identity key. It's a real participant now, not a reflection of the phone. So, one user is not
+just one device anymore, it's a small set of devices. And that changes what sending a message even
+means. Now, when you send a text message to someone who has four devices, your device encrypts the
+message separately for each of their four devices, and for each of your devices as well. So, all
+your screens stay in sync. So, one message really becomes one sealed copy per device, and on top of
+that, everything that used to live only on your phone, your history, your contacts, who's read what,
+now has to stay in sync across all your devices, encrypted the whole way, with the server still
+unable to read any of it. So, getting independent devices to agree like that under end-to-end
+encryption with no phone in charge anymore was the multi-year project. And even after all of this,
+the old rule still holds true, which is once a message is delivered, the server keeps nothing. The
+calls also work in a very similar way. WhatsApp uses its Erlang back-end to set the call up, working
+out who's calling whom, ringing the other phone, helping the two devices trade their encryption
+keys, but the actual voice and video does not go through WhatsApp servers. It goes straight from one
+phone to the other, directly encrypted the whole way. Only when the two phones cannot reach each
+other directly, when both of them are stuck behind difficult firewalls, only then does it fall back
+to passing the stream through a relay server. And we've talked about this exact setup in the WebRTC
+videos in my beginner system design series, so make sure you check it out. So, basically, we're
+repeating the same move everywhere else in the system, which is the server does the minimum and gets
+the two parties connected and then steps out. Now, let's honestly discuss about all the costs
+because the trade-offs are real, and senior engineers don't get to ignore them. The first one is the
+Erlang language itself. Now, Erlang is a niche language, very few people know it, and the learning
+curve is very steep. And there are far fewer ready-made libraries than what you'd get with something
+mainstream. And Rick Reed, the engineer behind a lot of this, had actually never written a line of
+Erlang before he joined. So, basically, you're tying your whole company to a language most engineers
+have never touched. It worked out extremely well for WhatsApp, but only because the language
+happened to match their exact problem almost perfectly. Now, for most teams, reaching for some
+unusual technology at the core is a good way to get stuck, but not a good way to win. It paid off
+for WhatsApp because the fit was nearly perfect. Now, there are some other costs as well. Not
+scaling up instead of out has a ceiling. There's a hard limit to how many connections one machine
+can ever hold. So, eventually you do have to add more and you've built your whole way of operating
+around having as few machines as possible. And there is a big risk in it. When one server is holding
+2 million people and fails, you've dropped 2 million people at once. So, the same efficiency that
+lets you run so few machines means that if any one of these machines go down, it's going to hurt a
+lot. So, you end up learning hard on fast failover to catch those falls. Now, the simple server
+we've been talking about has a cost as well because it can't read your messages and it doesn't store
+your history. It can't do anything that needs to see your content. It can't search your old chats
+for you on the server. It can't keep a clean backup you could restore from anywhere. So, all of that
+has to happen on the phone instead, which is exactly why syncing history across devices was so
+painful. The simplicity did not make the complexity disappear. It pushed it onto the phones. So,
+billions of them needs doing a little instead of onto WhatsApp's own servers. And the bet that the
+engineers at WhatsApp made paid off because they went from a billion users to 2 billion users on
+just a fraction of the engineers and the machines that that number would normally take. And they
+pulled off the biggest encryption rollout in history along the way. So, the takeaway from this video
+is not that small teams or monoliths are automatically easy. It's actually understanding that a lot
+of discipline is required to keep something this big this simple. So, there are five lessons you can
+take away very quickly. The first is that the cheapest way to make something scale is to make it do
+less. So, WhatsApp servers are really simple because they don't store your history and they can't
+read your messages. Second is pick the core piece that actually fits your problem. A messenger app
+is millions of mostly idle connections that have to stay open. So, they chose a runtime where
+connection costs a few hundred bytes instead of a whole thread. Third is scale up before you scale
+out. So, everyone's instinct is more machines. WhatsApp's instinct was to make one machine do the
+work of 50, then run as few as possible. So, fewer machines means fewer failures and that means
+there are lesser machines to run and lesser machines to keep track of. Fourth is to put the
+complexity where it's cheapest to run. So, they moved the encryption, the key handling, the source
+of truth, all of it to other people's devices and they kept their own servers simple. Fifth is you
+build for failure so that you're not constantly nursing it. They followed the let it crash
+philosophy where they had supervisor processes and they were looking at all the different processes
+that were failing and then respawning them whenever a process failed. Now, this is the kind of
+thinking we spend a lot of time on in the AlgoRock cohort. It's 12 weeks highly intensive. So, you
+look at real systems, you look at real trade-offs and you work through how to reason about the
+decisions engineers like the ones at WhatsApp had to make. Now, if that sounds useful, take a look
+at algorock.io. The link is in the description of this video. The lesson actually goes well past
+WhatsApp. The biggest, fastest systems usually are not the ones doing the most work. They're the
+ones doing the least, built on the right foundation with the fewest parts that can break. So,
+WhatsApp actually ran a huge share of the world's messaging on a stack small enough that a few
+people could hold the whole thing in their own heads. And they did most of this by saying no to
+complexity. So, the next time you're building something that's straining under load and before you
+reach out for another service or another 10 engineers, think like how the WhatsApp engineers
+thought. Now, making these deep dive videos takes a lot of work and time. So, please don't forget to
+subscribe to this channel and make sure you like and share this video and I'll see you in the next
+video.

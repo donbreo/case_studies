@@ -1,0 +1,255 @@
+Every time you search Google, you get an answer in about 200 milliseconds. To find it, Google is
+searching an index of more than 100 billion web pages, over 100 petabytes of data. So, that's a
+fifth of a second against 100 billion pages. There's no way to read that much data that fast, not on
+one machine or or even a whole data center. It's actually a physically impossible one. So, Google
+doesn't do it. It doesn't search the web when you hit enter. The search has already happened days or
+weeks before you ever even type your query. Now, I have a bunch of diagrams to show you, and it's
+going to be a highly visual video, and everything in these diagrams is pulled from Google's own
+published work. The original papers on how they built this are called the Google File System,
+MapReduce, BigTable, PageRank, and there's one that's literally called the Tail at Scale. I've
+basically distilled information from all these papers to build these visuals for you guys, and
+that's what we'll walk through today. So, here's the entire thing in one sentence, and then we spend
+the rest of the video on the mechanics. So, it's do all the heavy work ahead of the query, and never
+during it. And that single decision shapes every hard problem Google Search has, which is how they
+crawl the web, how they store it, why one search lights up a thousand machines at once, and why
+finding the pages is the easy part, and ordering them is what they've been at for 25 years, and why
+the whole thing is underneath one of the largest precomputed structures humans have ever built. This
+video is super important for you if you're a back-end engineer, a platform engineer, an SRE, or
+anyone who's ever had a slow query and reached for a bigger machine, because Google's answer was
+never a bigger machine. It was to make sure the expensive work was already done before anyone asked.
+So, you can do it the normal way, and when someone searches best coffee grinder, you can go ahead
+and read the web looking for matches. So, that's 100 plus petabytes, more than 100 million
+gigabytes, and reading through it takes longer than your entire latency budget by orders of
+magnitude, even spread across thousands of machines. So, that's not a tuning problem, it's physics.
+So, if you can't read the web at query time, the only option left is to not read it at query time.
+You read it once ahead of time and turn it into something you can look up instantly, and the rest of
+the system is built to do that one thing. So, there are two ways to organize the web. The natural
+one is that for each page you store the words on it. So, page one has these words, page two has
+those words. That's something called as a forward index, but it's useless for searching because to
+answer which pages contain coffee, you'd open every page and check, and that's the slow thing that
+we just said we won't do. So, you flip it. Instead of for each page which words, you store for each
+word which pages. So, the word coffee points to a list of every page that contains it, and that's
+the inverted index. And you already know it, it's the index at the back of the textbook. You don't
+reread the book to find every mention of mitochondria. You just flip to the index, and hands you the
+page numbers. So, Google built that, but for the entire web. So, Google does one thing before the
+words even become an index. So, each word gets tokenized first. So, it gets broken into terms, lower
+case, and normalized so that running, ran, and run can collapse towards the same root. And every
+term lives in a giant dictionary called the lexicon that maps it to where its list sits on disk. So,
+the lexicon is the front door, and the lists behind it are where the real data is. Now, each of
+those lists has a name. It's called a posting list. The posting list for coffee is every document
+that mentions coffee and stores more than just the page ID. It actually keeps where in the page the
+word appeared, and whether it was the title or a heading, and how it was used, which is everything
+you'll need later to judge how good a match each page is, including word positions, so you can
+separate coffee grinder, the phrase, from coffee and grinder scattered far apart. Now, these lists
+are compressed aggressively, and the trick is beautiful. The document IDs are kept in sorted order.
+So, instead of storing each full ID, you store the gap from the previous one, which is delta
+encoding, and those gaps are tiny numbers, and tiny numbers packed down to almost nothing with
+schemes like variable byte and group variant encoding. They even assign document IDs deliberately so
+that related high-quality pages cluster together and the gaps stay small. At 100 plus petabytes,
+that compression is not a nice-to-have. It's the difference between fitting in fast memory and not.
+And to keep the lists fast to traverse, they're sprinkled with skip pointers. These are little
+signposts that let you leapfrog forward through a list instead of walking every single entry. Now,
+watch what a search actually becomes. You type coffee grinder, Google grabs the posting list for
+coffee and the posting list for grinder and intersects them. So, it finds the pages on both lists.
+That intersection is your candidate set. So, you don't have to read the web, and you don't have to
+scan any pages, and it's not a dumb walk down to two huge lists, either. The skip pointers let it
+jump ahead. So, when one list says document 9 million, the other can leapfrog straight there instead
+of checking everything in between. A search is not a search, it's a lookup of precomputed lists and
+a fast overlap. So, it's very simple at the core. Everything else in this video is the engineering
+needed to make that simple idea work at the scale of the entire internet. All right, to build those
+lists, you first need a copy of the web. So, let's go get it. This is the crawler, Googlebot. Its
+whole job is to walk the web, fetch a page, read the links on it, add those links into a giant queue
+of things to fetch next, and keep going forever. It started from a small seed set decades ago and
+has never stopped following links ever since. That queue is not first-in-first-out, either. It's a
+prioritized frontier so that important and fast-changing pages get fetched before some dead corner
+of the internet. And there are some rules. So, you read each site's robots.txt to see what you're
+allowed to touch, and you pace yourself per site. So, you have a crawl budget so that you don't
+hammer a server with a thousand requests per second and knock it over. You let sites hand you a site
+map listing their URLs, so they're not discovering everything blindly. And there's something called
+as chemicalization where you noticed when there are 10 different URLs that are really the same page,
+so you don't store it 10 times. So, here is another important piece. A huge share of the modern web
+does not exist until JavaScript runs. So, Google does not just read raw HTML. It actually renders
+pages in a headless Chrome-based rendering service often in a deferred second pass because executing
+a browser for billions of pages is enormously expensive. The web also does not hold still. A news
+homepage changes every few minutes. A random page from 2009 has not changed in years. So, Google
+predicts how often each page changes and recrawls the fast movers constantly while barely touching
+the stale ones. The scale of this has got absurd now. In 1999, crawling and indexing 50 million
+pages took about a month. By 2012, that same job took under a minute. So, Google has discovered well
+over 30 trillion unique URLs, and some count actually put it past a 100 trillion. But it doesn't
+keep most of them. The vast majority of the web is duplicates, spam, auto-generated filler, dead
+links, infinite calendars that spit out a new URL forever. So, the crawler and indexer are
+constantly making a judgment call. Is this page even worth storing? Most of the time the answer is
+no, and the web Google actually searches is in the hundreds of billions, not the trillions. So,
+indexing the internet does not mean keeping the entire internet. It just means keeping the part
+that's worth answering questions from and throwing the rest away. So, the 100 billion pages your
+queries runs against is what survived that filter. So, the crawl hands you a copy of the web's
+content. Now, you turn it into the inverted index where you read every page, pull out every term,
+and build the posting lists. And this is where a huge chunk of modern infrastructure was born. To
+store all those files across thousands of machines, Google built the Google File System, and they
+later replaced it by its successor, Colossus. To process them in parallel, they built MapReduce, and
+to hold the index itself, they built Bigtable. So, those came out of making search work and then the
+rest of the industry copied everyone. The entire big data movement is in real sense the plumbing
+Google wrote for this index set loose on the entire world. And the cluster beneath all of this is
+scheduled by Borg, their cluster manager, which is the system Kubernetes was later modeled on. One
+more thing the Google's indexer does is that it doesn't just index the words on a page, it indexes
+the anchor text of links pointing to it. So if thousands of pages link to a site with the words best
+coffee grinder, Google attributes those words to the target so a page can rank for terms it never
+even contains. And the first indexer rebuilt everything in big batches, which meant a brand new page
+might not appear until the next full pass. And as the web sped up, that delay became unacceptable.
+So around 2010 they shipped a rewrite called Caffeine. And it was built on an incremental system
+called Percolator that updates the index with small transactions instead of full rebuilds. So new
+content now shows up in minutes. And it's the same pattern you've seen before. The approach that got
+them a working index wasn't the one that survived at the next level of freshness. Now the index is
+over 100 petabytes, so it obviously does not live on one server. It's split into thousands of pieces
+and how you split it matters. So you could split by word where one machine owns posting lists for A
+through C and another B through F. So Google doesn't do that for a good reason. Instead they split
+by document. So you chop the web into thousands of slices and each slice gets its own complete
+little inverted index covering just its share of the pages. The shard one has the full index for its
+slice and shard two for its own slice and so on across thousands of shards. And every shard can
+independently answer which of my pages matches this query. Now before we go any deeper, I want to
+take a few seconds to tell you about a cohort that I teach personally to 15 to 20 senior engineers
+every few months and it's called the Algo Rock cohort. We cover advanced system design and
+architecture for the post AI world. And usually the people who attend are senior guys like SREs,
+platform engineers, principal engineers, enterprise and architect, and VP engineering. So, there are
+people all the way from 5 years to 36 years of experience. And this is a great way to learn from
+actual production case studies. The next cohort starts in early July, so I want to go through the
+website algoexpert.io. And you can actually go through the topics that we're going to cover in this
+cohort. So, we'll cover modern systems like how Anthropic handles LLMs and how Hugging Face handles
+so many sandboxes for AI models and how Together AI hosts so many open-source models at scale. It's
+12 weeks, highly intensive. And if you like the list of topics, I want to go and hit the reserve or
+the enroll button on top and fill up the form that opens up. Now, once you fill the form, we'll
+check to see if you're a great fit and we'll set up a call with you. The live cohort, which is
+personally taught by me, is about $2,400. And if you just wanted access to pre-recorded videos,
+that'll be about $800. Now, if you're early on in your career and beginning engineering right now,
+this cohort might not be relevant to you, so please don't fill up the form. All right, now let's go
+back to the video. Now, as soon as you hit enter, the very first thing that happens before the index
+is even touched, is that Google rewrites your query. So, it fixes your spelling, expands words into
+their variants, and works out that how to speed up a slow laptop and make my computer faster are
+after the same thing. It also recognizes real-world entities that Jaguar near speed is the animal,
+not the car. So, it's leaning on the knowledge graph, which is Google's structured database of
+people, places, and things. So, the words it's about to look up are not always the words you type.
+They are a cleaned-up, expanded, disambiguated version. So, the lookup catches the right pages even
+when nobody used your exact phrasing. Now, the index is split by documents. So, no single machine
+can answer your search. Each shard only knows its own slice, and your page could be in any of them.
+So, Google asks all of them. Your rewritten query fans out to the shards. Every shard searches its
+own little index in parallel, finds its best matches, and sends them back. The results all get
+merged, and the best results flow to the top. So, that's scatter and gather. Scatter the question to
+everyone, and gather the answers back. So, don't think about this like literally one machine phoning
+a thousand others, because then that one machine would be the bottleneck. The fanout actually goes
+through a tree. So, there's a root server that hands the query to the intermediate mixer servers,
+which hand it to the leaf servers holding the shards. And the answer actually emerges back up the
+same tree. So, the work of talking to everyone is itself spread out. But the headline that you see
+associated with many Google articles online is actually real. One Google search lights up on the
+order of a thousand machines all working on your single query for that fraction of a second. It has
+to because the only way to search a slice in time is to search every slice at the same time. But
+fanning out to a thousand machines creates a nasty problem and it's one of the most important ideas
+in large scale systems. Google's engineers literally wrote the paper on it called the tail at scale.
+So, when you wait on a thousand machines, you're not waiting for the average one, you're waiting for
+the slowest one. So, your answer is not ready until the last shard reports. And across a thousand
+machines, a few are always having a bad moment. So, one's doing garbage collection, one's on busy
+hardware, one just hit a slow disk. So, even if a typical shard answers in five milliseconds,
+there's almost always a straggler taking 50 milliseconds. And the fix for this is that you
+deliberately send the same request to more than one replica and take whichever returns first. So,
+this is called as hedged requests. A sharper version of this called tied requests tells the replicas
+to cancel each other the moment one starts so you don't pay for the duplicate twice. So, doing
+redundant work on purpose feels wasteful, but it's a trick. When one stalls, another covers and the
+straggler never gets to define your speed. At this scale, that's not an optimization, it's the only
+way the 200 millisecond promise survives contact with reality. So, Google splits the work into two
+phases with completely different costs. Phase one is a driven. The shards use the index to grab
+candidate pages that match and the scoring here is cheap and rough. So, use classic stuff like BM25
+that just weighs how often and where your terms appear. And that's actually enough to throw away
+obvious garbage. And even within a posting list it does not score everything. So you have dynamic
+pruning algorithms like wand and block max wand, which let it skip whole chunks of documents that
+probably cannot crack the top results. So it touches a fraction of each list. And phase two is
+ranking. So you take that small surviving pile and run the expensive careful analysis to put it in
+perfect order. The point is you never run the expensive logic on a hundred billion pages. You run
+the cheap thing on everything to get down to a few hundred, then the expensive thing on just those
+few hundred. So just to repeat, cheap on all and expensive on few. And that shape shows up in well-
+designed systems everywhere. So Google treats a link from one page to another page as a vote of
+confidence. And a page that lots of other pages link to is probably good. And a vote from an
+important page that itself is heavily linked counts for more than one from a random blog. And this
+is called as page rank. The clean way to picture it is imagine a random surfer clicking links
+forever and with a small chance of jumping to a random page. So this is called as a damping factor
+and page rank is just how often that surfer lands on each page. So you compute it by iterating over
+the entire web modeled as a graph until the number settle. So it basically judged a page by what the
+rest of the web thought about it and not by what the page said about itself. And so this is actually
+hard to fake because you can't easily make thousands of trusted sites link to you. But that was 25
+years ago and the link idea still lives on but page rank is now just one signal out of hundreds of
+other signals like how well the page matches your intent, how fresh it is and how fast it loads,
+where you are, your language and your device. And now layered on top of those are machine learning
+systems that try to understand what your words actually mean rather than just matching them. So
+Google has since then shipped a whole line of these. RankBrain in 2015 was their first ML ranking
+signal. It had neural matching. Then you had BERT in 2019, which read queries as language instead of
+keywords. And that's how a search for change a tire can surface a page that says replacing a flat
+with no common words in between. Now, this ordering algorithm is the part that Google never stops
+rewriting because finding the candidate pages is the index doing a lookup, which is basically
+solved, but ordering them is an open adversarial never-finished problem because there's an entire
+SEO industry trying to game it, and the best answer is a moving target. So, retrieval is just
+engineering, whereas ranking is a war that does not ever end. Now, there's a piece of this which is
+purely agency engineering because we still have that 200 ms budget to defend. So, spinning disks are
+far too slow, so one disk seek can eat a big chunk of your whole budget. So, the index serving a
+query lives in RAM and flash, not on slow disk, and they go further with tearing. And the smaller
+tier of popular, high-quality pages sits in the fastest storage and answers the bulk of everyday
+searches. While the enormous long tail, which is the obscure stuff that almost nobody looks for,
+lives on cheaper, slower storage and only gets pulled in when a query actually needs it. So, most
+searches never plow through the full 100 billion pages at all, and then the whole thing gets copied.
+So, Google handles on the order of 8 and 1/2 billion searches a day from all over Earth, and a user
+in Tokyo cannot wait on machines in Virginia. So, the entire system with index shards, serving
+stacks is replicated many times over in data centers worldwide. And your search actually goes to a
+copy of it which is near you. And that replication buys three things at once. So, you have low
+latency because the data is close, and you have throughput because load spreads across many full
+copies, and survival because if one data center dies, then others can carry the traffic. A huge
+share of searches are actually repeat searches. So, Google has said that roughly 15% of the queries
+it sees each day are brand new, ones it's never seen before. And if you flip that around, there's
+actually an enormous amount of repetition in the test. The same popular things searched by many
+people often at the same moment. So Google can cache all these results. So when a common query has
+already been computed without bothering the shard at all. So it's not every query, anything
+personalized or time-sensitive gets recomputed, but across that mountain of identical searches,
+caching absorbs a massive share of the load before it ever touches the expensive machinery. So if
+you remember that we decided to move all the work before the query, so that buys a speed, but it
+costs us freshness. So the moment you finish building an index, it's already a snapshot of a web
+that's already moved on. So that means that a page that has changed just 30 seconds ago is not there
+yet. And that's why incremental indexing, which is caffeine and percolator, matter so much and why
+some searches get special treatment. So if you're searching a breaking news story or a live score,
+so Google can't wait for the normal crawl index cycle. So faster paths pull fresh content in close
+to real time and splice it into your results. Pre-computing the answers is what makes search fast,
+but keeping that pre-computed answer from going stale is a permanent separate job that never ends.
+So in 2026, you're probably asking a question that isn't it all AI now because Google writes you an
+answer at the top, which is called the AI reviews and overviews. And you also have the AI mode which
+is powered by Gemini instead of 10 blue links. So doesn't that throw out everything we've just
+covered so far? Well, it's actually the opposite. It makes all of it matter even more. A language
+model on its own doesn't know what's true today and will happily make things up. So to write a
+trustworthy answer about a real question, it first has to find the relevant pages and that's
+retrieval. So you have crawl, index, fan out, retrieve, and rank. And the AI layer sits on top. It
+takes the pages that retrieval hands it and writes a summary grounded in them with citations back to
+the sources. And Google's own term for it is called grounding. It's retrieval augmented generation
+at planetary scale and it's a managed version of the same pattern every serious AI product now uses.
+The index did not die in the AI era, it just became the thing the AI leads from. And actually,
+retrieval quality matters more now and not less because the answer is only ever as good as the pages
+you feed it. So, we can talk about the tradeoffs now because as senior engineers, we don't get to
+skip them. First, the index only ever grows and you're paying to keep a fresh copy of the worldwide
+web at all time, forever. So, second, freshness. You are fundamentally searching a snapshot, never
+the live web. And closing that gap actually takes constant effort. Third is baked into the document,
+so it's sharding choice. Because the index is split by document, almost every real query fans out to
+every shard. So, you light up a thousand machines for one search and a different split might touch
+fewer machines, but it would give up the gain parallelism and ranking quality that fan out makes
+possible. And fourth is that ranking is a permanent arms race against an entire industry trying to
+game it, which is the SEO industry. So, Google decided that lighting up a thousand machines for 200
+milliseconds and fighting that ranking war forever was the price of speed and relevance and that's
+the trade to live. So, here are the five lessons that we can take away from this video. The first is
+that the only way to answer a query fast is to have already answered it. Second is that at fan out
+scale, your tail latency is your latency. The instant one request depends on many machines. So, the
+average machine stops mattering and the slowest one takes over. You separate retrieval from ranking.
+So, getting candidate matches and ordering them perfectly are different problems with widely
+different costs. Fourth is you find the duplicated work and you do it once. And most of Google's
+traffic is the same popular queries over and over and caching that is as load-bearing as the index
+itself. Fifth is that a precomputed answer is a stale answer and freshness is its own permanent
+system. So, the moment you cache or index something, you've chosen a snapshot of the world and
+keeping it current is actually going to take a lot of effort after that. And this is exactly the
+kind of thinking we go down deep in the algo.io cohort, 12 weeks highly intensive. We We on real
+systems, we look at real tradeoffs. So, if it's useful to you, check out the algo.io link in the
+description. Now, there's a lot to learn here from Google actually pre-computing those answers. The
+next time something in your system is too slow at read time, don't reach for a bigger machine and
+ask the question that Google asked instead, "Can I do this work ahead of time and turn the request
+into a lookup?" Now, making these deep dives takes a lot of work, so please don't forget to
+subscribe, like, and share. I'll see you in the next video.

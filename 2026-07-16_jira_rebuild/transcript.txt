@@ -1,0 +1,313 @@
+At first glance, Jira seems deceptively simple. You create a task, assign it, move it around the
+board, and then search. From the outside, it all looks like a regular ticket tracker. But beneath
+the surface, it solves a much more complex task: it serves hundreds of thousands of companies, each
+with its own projects, workflows, permissions, and data, creating the illusion for each client of
+working in an isolated Jira instance. To make this work, Atlassian, the owner of Jira, adopted a
+number of rather unique and innovative engineering solutions. In this video, we'll look at seven
+such solutions. First, why Jira gives each client their own database, instead of storing everyone in
+shared tables. The second is the routing system that every request in Jira depends on to determine
+where the customer's data is located. Third—why Atlassian runs thousands of local copies of this
+routing system across its entire infrastructure. Fourth—how Jira synchronizes the search index with
+millions of databases without constantly rebuilding it. Fifth—how JQL is parsed and compiled more
+like a programming language than a search string. Sixth— how Jira enforces access rights by
+integrating them directly into search queries so that unauthorized tasks never end up in the
+results. Finally , we will look at the platform architecture that allows Jira, Confluence,
+Bitbucket, and other Atlassian products to use shared services thanks to a universal identity
+system. It's worth noting that none of this existed when Jira first came out. This wasn't even in
+Jira's original system design. Jira started as a Java application that companies installed on their
+own servers. And the version we use today is the result of years of transformation from a monolith
+to a global cloud platform, without interrupting customer service. Almost everything in this video
+is based on Atlassian's technical publications about the Jira platform, including blogs on tenant
+routing, search architecture, and cloud migration. I just reworked all this information into visual
+diagrams, so the video will be very visual. You should watch until the end to understand the seven
+things we talked about that Atlassian has implemented uniquely in its system design. Maybe you can
+apply some of this to the systems you design. So, let's start with the solution that defined almost
+everything else, such as how Jira stores customer data. The fact is that Jira was not originally
+built as a cloud service. For most of its history, it was software that companies installed and ran
+themselves . One company could buy Jira, deploy it on their own servers, connect it to their own
+database , and everything that happened inside that Jira instance belonged to them. And this model
+is very simple, as each customer gets their own copy of the program. There is no sharing here. There
+are no problems with "noisy neighbors ". One company's data can never accidentally get into
+another's data because they operate in completely separate systems. But Jira Cloud fundamentally
+changes this problem. So, Atlassian doesn't run a single instance of Jira for a single company. It
+runs Jira for hundreds of thousands of companies simultaneously, all on a shared infrastructure.
+Therefore, every project, task, attachment, workflow, and permission must belong to the correct
+client, even though the client should feel like they have their own private instance of Jira. And
+the concept that makes this possible is the tenant. A tenant is a single customer's Jira site , i.e.
+something hosted at an address like yourcompany.atlassian.net. And every request, every piece of
+data, every search query, and every permission check is ultimately limited to the boundaries of that
+tenant. When Atlassian chose the tenant as the fundamental boundary of the system, they had to make
+many architectural decisions to implement it. For example, how data is stored, how requests are
+routed, how search works, and even how services communicate with each other. So, the first important
+decision Atlassian had to make was where tenant data would be stored. Most SaaS applications use a
+traditional approach where everyone shares the same database, has the same tables and schema, but
+each row in the database contains a tenant ID, which filters each query by. But Jira does n't work
+that way. Instead of storing all customers' data together, Atlassian provides each tenant with a
+separate database. This sounds very expensive, and it is. There are now millions of tenant databases
+in the Jira cloud—not millions of servers, but millions of databases. And many of these databases
+are hosted on shared Postgres instances distributed across several hundred thousand database servers
+around the world . So, a Fortune 500 company and a 10-person startup can run on the same physical
+machine, but their data resides in completely separate databases. And the reason for such
+architecture is isolation. In the shared table model, the partitioning is provided by the
+application logic, where each query must remember to filter the data by tenant. But in the Jira
+model, the separation exists at the database boundary itself. Therefore, one tenant cannot
+accidentally query another tenant's data because they are not stored in the same database to begin
+with. And this level of isolation actually brings them many advantages. A problematic request will
+only affect one client, not all at once. And migration can occur for each tenant separately. This
+makes it easier to comply with data location requirements, as one client can be moved to another
+region without affecting the rest. The main trade-off here is operational complexity. With support
+for millions of databases, Atlassian has to consider things that other SaaS companies don't even
+think about. One particularly important problem is the "noisy neighbor," where one large client
+consumes so many database resources that it slows down everyone else on the same server. To prevent
+this, Atlassian places strict limits on the number of database connections for each individual
+customer. As you can see, such a system is more complicated to operate, but Atlassian decided that
+isolation was worth the effort for the sake of customers. However, this solution to isolation and
+workspace boundaries creates a new problem. If each tenant has its own database, and those databases
+are spread across thousands of servers around the world, how does a request know where to go? Giving
+each tenant their own database solves one problem, but creates another. These databases have to be
+stored somewhere. At Atlassian's scale, you can't just scatter millions of databases across the
+infrastructure at random and hope for the best. You need a way to group them, manage them, and move
+them around as the platform grows. And this is where shards come to the rescue. So , Jira moved to
+AWS as part of a multi-year initiative called Project Vertigo. It was then that the platform was
+organized into shards. A shard is not just a database server , it is an entire segment of the
+platform. These are web servers that process requests, worker nodes for background tasks, and a
+Postgres instance that stores the tenant database assigned to this shard. When a new customer signs
+up , Atlassian places them on a specific shard in the selected AWS region, and from that point on,
+the shard becomes the home for that customer. This means that a query can't go anywhere until it
+answers a simple question: which shard serves this tenant? If a customer opens Jira from London, the
+request arrives at Atlassian’s doorstep, but the data could be in Frankfurt, Sydney, or Virginia.
+Before a query can read even a single question or update a ticket, it must find out where the
+customer's data is physically located. And this responsibility falls to one of the most important
+services in the entire Jira platform. So, we found out that giving each tenant its own database
+solves the isolation problem, but at the same time creates a routing problem. Before Jira can read
+an issue or update a ticket, it needs to answer a basic question: where is the tenant located? For
+example: in which region, on which shard, in which database, which features are enabled, and what
+license they have. This information is stored in the Tenant Context Service, or TCS. Think of TCS as
+a system directory. With the tenant ID, she can tell you everything you need to know about that
+tenant. For example, where the data is stored, how it is configured, and what capabilities it is
+allowed to use. The importance of this search cannot be overstated. Every request depends on this .
+Nothing can be properly directed until TCS gives an answer. If TCS was unavailable, Jira would not
+know where any tenant's data was located. And significant parts of the platform would actually stop
+working. Therefore, Atlassian considers TCS to be critical infrastructure. It processes tens of
+thousands of requests per second in each region, keeping latency within a few milliseconds. Its
+architecture is highly optimized for reading, as the number of search requests significantly exceeds
+the number of updates. But the most interesting design decision is that most services do not contact
+the central TCS at all. Instead, Atlassian uses lightweight TCS sidecars across the platform,
+thousands of them, and these sidecars maintain a local copy of the tenant metadata, allowing the
+service to recognize the tenant through a local lookup instead of a network query to a remote
+dependency. This eliminates delays, reduces the load on the central service, and avoids turning each
+request into a chain of remote searches. So, when a request comes to the Atlassian edge, the
+platform identifies the tenant , determines its location via TCS, and routes the request to the
+correct shard and region. And only after that can you start direct work. Jira was not created as a
+set of separate services. For many years, it was one big Java application, a monolith. So, issues,
+boards, workflows, permissions, search, notifications—it all lived in the same codebase, ran in the
+same process, and talked to the same database. If you have worked with scalable systems, you know
+that this monolith model works well for a long time, but the problem arises later when different
+parts of the system grow at different rates. Yes, search functionality may have completely different
+scaling needs than permissions functionality. And working with problems is significantly different
+from rendering boards and other similar services. Ultimately, scaling the entire application as a
+single unit becomes wasteful. Therefore, Atlassian began to divide the monolith into smaller
+services. Responsibilities that previously belonged to a single application have been moved to
+separate services. Issues got its own service. Access rights and configuration now have their own
+service. And search now has its own service called Jinks. Each of them can now scale, deploy, and
+evolve completely independently. But the most difficult part is not designing these new services.
+The real challenge is to migrate millions of users from the old system to the new one without them
+noticing. Therefore, Atlassian chose a gradual migration approach. Instead of rewriting Jira and
+flipping a giant switch in one day, they route traffic in pieces: a certain operation, page, or API
+endpoint runs on the new service while everything else continues to flow through the monolith. The
+change is first implemented for a small group of tenants, closely monitored, and then scaled up as
+confidence grows. Over time, more and more requests bypass the monolith, and as a result, the
+platform continuously transforms, remaining alive, and users often don't even know that the system
+serving them today is significantly different from last year. So, before we delve any further, I
+want to take a few seconds to tell you about a cohort that I run every few months, the AlgoRock
+Cohort. We consider advanced system design and architecture for the post-AI era. We are typically
+attended by experienced engineers such as SREs, platform engineers, lead engineers, enterprise and
+solution architects, and VPs of engineering. There are people there with experience ranging from 5
+to 26 years. This is a great way to learn from real production cases. So I advise you to visit the
+website algorock.io (a l g o r o q dot i o) and familiarize yourself with the topics we will cover.
+We will analyze modern systems: how Entropic works with LLM, how Hugging Face supports multiple
+sandboxes for AI models, and how together AI hosts so many open-source models at scale. It's 12
+weeks long and each session is quite intense. If you like these topics, fill out the form that
+appears after clicking the " book" or " register" button above. After filling out the form, I will
+check if you are a good fit for us and we will arrange a call. The live cohort , which I personally
+lead, costs about $2,400, but there is a huge waiting list for it because I can only accept a
+limited number of people. And I only conduct this cohort when I have time after my main job. The
+recommended way is to access pre- recorded sessions. It's only $800, and getting reimbursed from
+your company is very easy. If you are just starting your career in engineering, this course may not
+be very relevant to you , so filling out the form is not necessary. Okay, back to the video. The
+search is not performed directly in the Jira database. That would be very slow. Therefore, Jira
+maintains a separate search index. Historically, it is built on Apache Lucene, optimized for search
+tasks. Each task in the database is converted into a document that is searchable in the index. The
+user's query is executed against this index, not against the underlying tables. An important nuance:
+the index is not the original source of data. This is just a copy. Every time you maintain a copy of
+data, you get a new problem— synchronizing the copy with the original. Most changes are simple: the
+task is updated, and the corresponding document in the index is also updated. But some changes are
+much broader in scope. You add a new calculated field, change the field configuration, or modify
+visibility rules. Suddenly it turns out that the problem is not in one task. Potentially thousands
+or millions of documents in the index become incorrect and out of sync. Jira faces a difficult
+question. Which documents of all need to be reindexed? Historically, the answer has often been
+unclear. To avoid the risk of returning incorrect search results, the safest option was a complete
+reindex. This is where the famous "re-index" process comes from. However, on large Jira instances, a
+complete reindex was not a trivial task. It could take hours, consume significant CPU and RAM
+resources, and create a heavy load while Lucene rebuilt and merged index structures. If the process
+was interrupted, administrators could be left with incomplete, locked, or corrupted indexes. The
+problem was not in Lucene. The problem was the architecture. Search depended on a copy of the data,
+and when it became outdated, Jira needed a reliable way to synchronize. So the next challenge was to
+ensure that the index was consistently consistent with the database without massive rebuilds with
+every change. So my solution was to stop thinking of the index as something that gets rebuilt from
+time to time and start thinking of it as a system that constantly checks itself against the
+database. So, whenever a task changes, Jira immediately sends that change to the search cluster. But
+this is only the first step, as networks can fail, messages can get lost, and machines can reboot. A
+successful write to the database does not guarantee that the corresponding update has made it into
+the index. Therefore, Jira keeps a second record of what should have been indexed. Along with the
+update, it writes metadata to the database describing the document and its version. And this record
+becomes the source of truth for the indexing process itself. The background reconciliation task
+constantly compares the state of the world in the database with the search clusters. And every
+minute it asks a simple question. Does the index contain the documents it is supposed to contain?
+And do they correspond to the proper versions? If the document is missing, it is re-indexed. If the
+version is outdated, it is updated. And if a transaction is lost during transmission, the
+reconciliation process eventually detects the gap and corrects it. So, the database effectively
+becomes a checklist for the index. Instead of assuming that the index is correct, Jira constantly
+checks it. The same philosophy applies to reindexing. In the past, rebuilding an index was difficult
+because the current index had to be replaced, but modern systems work differently. The new index is
+created in parallel with the existing one, while search continues to work normally. Once this
+rebuild is complete, the system recreates all the changes that occurred during the process, making
+the new index fully up-to-date. Then, in a single atomic operation, search traffic is switched to
+this new index. Users, of course, don't even notice this transition. This broader lesson goes far
+beyond Jira. Whenever you maintain a search index, cache , replica, or derived view of data, the
+challenge is not in creating them, but in maintaining their correctness. Reliably scalable systems
+are usually those that take into account the possibility of deviations and constantly verify data,
+returning to consistency. Now let's look at what happens when a search query comes into Jira. Jira's
+query language seems simple at first glance : you write something like " project equals payments,
+performer equals current user, sort by creation date," and Jira returns a list of matching tasks.
+But a search engine cannot execute a query in this form because search indexes are not built on
+human-understandable names. They work with internal identifiers. The index doesn't know what
+"payments" means. He knows the project ID. He doesn't know who the developers are, he knows a set of
+user IDs. Therefore, before performing a search, Jira must convert the query into something that the
+search engine understands. The process starts by parsing the JQL and converting names to internal
+identifiers. So, projects become project IDs, users become user IDs, and groups become sets of user
+IDs. Atlassian then transforms the query into a low-level representation optimized for execution in
+the search index. Some parts cannot be solved until the search begins. Features like "current user "
+depend on who is making the request. Features like " Developer Members" depend on the current group
+membership status. And these values ​​should be dynamically expanded during the query before the
+search execution begins. When a query enters OpenSearch, it looks completely different from the text
+originally entered by the user . That's why it's more useful to think of JQL not as a search string
+, but as a separate programming language, because Jira parses it, determines identifiers, deploys
+dynamic functions, validates, and converts it into an execution plan. In other words, Jira doesn't
+execute the text, it compiles the query. And before this query runs, the compiler needs to solve
+another problem: what exactly is this user allowed to see? Permissions are what makes searching in
+Jira really difficult. Finding relevant tasks is easy, but finding the ones you are allowed to see
+is difficult. Because the access rights model in Jira is not simple. In Jira, access can depend on
+the project, your role, or your membership in groups. Some tasks have their own security rules, and
+some permissions depend on the content of the task itself. The author can see his task, the executor
+can see his tasks, and so on. Now imagine performing a search among millions of tasks. The obvious
+approach is to first perform a search, retrieve all matching tasks, and then check the permissions
+on each result before displaying it to the user. But on the scale of Jira, this is a disaster,
+because a query can correspond to a million issues, and the user only needs the first 20 . So
+running a million permissions checks just to return 20 results is never going to be fast. Therefore,
+Jira chooses a different approach. Jira does not apply permissions after a search. It implements
+rights checking directly into the search query. Project-level permissions are represented directly
+in the search index, allowing query engines to filter out entire sets of tasks before they are
+considered as results. A more interesting and complex case is dynamic rights, i.e. rules that depend
+on the current user or the content of the task. The performer can see the task, the author can see
+the task, and members of a specific group can see the task. These rules cannot be calculated once
+and forgotten. Instead, when a search is run, Jira collects the access rights information relevant
+to the current user, combines it with group membership and granted permissions, and integrates these
+restrictions directly into the search query sent to the index. So, at the time of the query, the
+search engine already knows what the user is allowed to see. And therein lies the key idea. Access
+rights are not a filter applied to search results, they are part of the query itself. This is what
+allows Jira to perform permission-aware searches across millions of issues without turning every
+query into a massive permission check. There is one final project solution that helps maintain
+search speed even as Jira grows to millions of users. The search index is not viewed as one giant
+array of data. Instead, Jira divides the index by tenants and projects, with all tasks belonging to
+a project stored together on a single shard. And this turns out to be a very useful property . Most
+searches in Jira don't apply to every task in the company. They relate to a specific project or a
+small group of projects. For example, show open bugs in the payments section. Show priority tasks in
+mobile development. Show me everything that is assigned to me in the infrastructure. Because related
+tasks are stored together, Jira can often query directly to the buckets containing those projects
+instead of searching the entire index. So, the amount of data that needs to be searched is
+drastically reduced from the entire array to a very small portion. So a company may have thousands
+of projects and millions of tasks, but a single request usually affects only a fraction of them. By
+aligning the physical structure of the index with the way users search for data, Jira avoids doing
+unnecessary work. It's a simple but powerful idea. Data that is requested together should be stored
+together. As Atlassian's products grew, they kept running into the same problem. Access rights exist
+in Jira. They also exist in Confluence . They also exist in Bitbucket. The same goes for comments,
+mentions, notifications, and many other features. Creating each of these capabilities separately for
+each product would mean constantly solving the same problem. Therefore, Atlassian introduced a
+common primitive—the Atlassian Resource Identifier, or ARI. So, every important object on the
+platform receives such an identifier. A Jira issue has an ARI, a Confluence page has an ARI, a
+Bitbucket merge request has an ARI. When everything can be identified the same way, platform
+services no longer need to know which product they are working with. The permissions service no
+longer requires logic specific to Jira or Confluence. It can simply answer the question: can this
+user read this resource? And the resource is represented using ARI, regardless of whether it is a
+ticket, page, or pull request. The same idea applies to comments, mentions, notifications, and other
+sharing capabilities. Instead of recreating them for each product, Atlassian can create them once
+and reuse them across the entire platform. This is a classic engineering approach: standardize
+primitives, and shared services become much simpler. And this is important because Jira no longer
+serves one product, but customers across multiple products, regions, and continents, which creates a
+completely different problem. As Jira grew globally, another architectural requirement began to
+emerge. This was data residency. Large enterprises and regulators are now increasingly demanding
+assurances about where their data is physically stored. A European customer can request that their
+data remain in Europe. An Australian customer may request that they be stored in Australia.
+Atlassian models this using a concept called " realms." A realm defines a set of regions where a
+tenant's data is allowed to be stored. This information is stored centrally, so each service on the
+platform can make decisions that comply with these constraints. This means that the routing issue is
+not just about performance. We have previously seen requests to TCS about where a tenant lives, but
+the answer is not simply the nearest convenient region. The tenant scope sets hard boundaries on
+where data can be stored and where requests can be directed. And these boundaries are not fixed
+forever. Customers may move, rules may change, companies may enter new markets. Therefore, Atlassian
+created the ability to migrate tenants between realms, allowing data to be replicated while
+maintaining the same customer experience, and another piece of infrastructure was needed to make
+this happen. So, underneath Jira, Confluence, and other Atlassian Cloud products lies an internal
+platform called Micros. She is responsible for deploying and operating services in AWS regions
+around the world. The value of such a platform is not noticeable when everything works stably. It
+manifests itself when you need to scale, because deployment , network configuration, service
+discovery, and operational tools are already standardized. Therefore, launching services in a new
+region becomes much easier. Atlassian engineers described the creation of an entire new global
+region during the hackathon not as an infrastructure project, but rather as a configuration tuning
+exercise. This is the result of creating the platform that underlies the products. Now that we've
+seen the main parts, let's follow the search query as it travels through the entire system. So, when
+you type a JQL query and press Enter, the query first goes to Atlassian Edge. Before anything
+happens, the platform needs to determine where your client is, so it contacts the client context
+service. It identifies the client's home layer and region, while ensuring that the routing decision
+complies with any data placement restrictions set for your environment. Now, when a request reaches
+the desired region, the search service begins processing it. The JQL you entered is not executed
+directly. It is parsed and compiled, so project names are converted to internal identifiers, and
+functions like current user and members of are resolved based on your identity and the current state
+of the system. A human-readable query is transformed into something that a search engine can
+effectively execute. And then comes the hardest part—permissions. So, the search service collects
+the permissions that apply to you, combines them with your group memberships and granted access
+rights, and then implements these rules directly into the query plan. When a query reaches the
+search index, it already knows which tasks you are allowed to see. The query is then sent only to
+those index layers that contain the relevant customer and project data. Instead of searching the
+entire platform, Jira searches a much smaller segment of the index that is likely to contain the
+answer. The index returns the IDs of the corresponding tasks, which are then used to retrieve the
+complete task records from the Postgres database dedicated to the client, generating the results you
+see on the screen. The reason for the accuracy of search results is that the index is constantly
+being reconciled with the database in the background . What looks like a simple search string is
+actually a chain of routing, query compilation, permission evaluation, distributed search, and data
+retrieval working together on a platform of millions of isolated customer databases. This
+encapsulates the overall architectural design of Jira's work, and we were only able to understand it
+because we studied this entire set of diagrams. That's why, unlike other videos, we didn't jump
+straight into system design. We covered all the basics, background, and fundamental knowledge to
+understand why systems design works the way it does and why it is so effective . There are several
+ideas from Jira that are worth adopting for your own system design. First, multi-tenancy doesn't
+necessarily mean putting everyone in the same database. Atlassian chose isolation over density,
+giving each customer their own database and accepting the operational complexity that comes with it
+. The reward is a smaller impact area, easier migration, and stronger distribution across clients.
+Second, if every query depends on knowing where the tenant lives, such a search becomes critical
+infrastructure. Jira treats tenant routing as a top priority with a dedicated service optimized for
+fast and reliable responses. Third, if you support a search index, expect it to decline. The goal is
+not to prevent any inconsistency. The goal is to identify them and constantly align the index with
+the source of truth. Fourth, query languages deserve to be treated as real languages. Jira does not
+execute JQL as text. It parses it, resolves it, deploys dynamic functions, and compiles it into
+something that the search engine can efficiently execute. Finally, permissions scale much better
+when they are part of the request rather than applied later. The fastest permission check is the one
+that doesn't need to be done, because unauthorized data is not returned from the beginning. So, this
+is exactly the type of systems design that we are analyzing in the Albra course. We look at real-
+world industrial architectures, the tradeoffs between them, and the engineering solutions that make
+them work. If you are interested, you can find details at albra.io. The link is in the description
+of this video. Reading and processing all the information from engineering blogs and then converting
+it into these diagrams takes a lot of time and effort, especially after the main work. So please
+don't forget to subscribe to this channel and share this video with your colleagues. Also, be sure
+to like this video and leave a comment. Thanks for watching, see you in the next video.

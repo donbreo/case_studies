@@ -1,0 +1,594 @@
+[
+	{
+		"group": "PayPal fraud detection",
+		"title": "Fraud Detection Architecture",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How a payment-risk system combines fast decisions with evidence prepared ahead of time.",
+		"path": "2026-09-29_paypal_fraud_detection/paypal_fraud.md",
+		"format": "markdown"
+	},
+	{
+		"group": "PayPal fraud detection",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the fraud-detection explainer.",
+		"path": "2026-09-29_paypal_fraud_detection/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "CockroachDB architecture",
+		"title": "CockroachDB Architecture",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How ranges, Raft, distributed transactions, and clock uncertainty fit together.",
+		"path": "2026-09-23_cockroachDB_architecture/cockroachdb_architecture.md",
+		"format": "markdown"
+	},
+	{
+		"group": "CockroachDB architecture",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the CockroachDB explainer.",
+		"path": "2026-09-23_cockroachDB_architecture/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "AI safety",
+		"title": "Refusal Filters vs Containment",
+		"kind": "Argument explainer · Markdown",
+		"description": "Argues that containment, not refusal filtering, is the AI safety control that actually protects defenders.",
+		"path": "2026-09-17_ai_safety/ai_safety.md",
+		"format": "markdown"
+	},
+	{
+		"group": "AI safety",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the AI safety explainer.",
+		"path": "2026-09-17_ai_safety/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Amazon Prime Video microservices",
+		"title": "Amazon Prime Video Microservices",
+		"kind": "Architecture explainer · Markdown",
+		"description": "Why Prime Video merged a serverless monitoring pipeline into one process and cut costs over 90%.",
+		"path": "2026-08-28_amazon_microservices/amazon_microservices.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Amazon Prime Video microservices",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Amazon Prime Video microservices explainer.",
+		"path": "2026-08-28_amazon_microservices/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "CrowdStrike outage",
+		"title": "CrowdStrike Outage",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How a 21-versus-20 field mismatch in kernel content updates crashed 8.5 million Windows machines.",
+		"path": "2026-08-24_crowdstrike_outage/crowdstrike_outage.md",
+		"format": "markdown"
+	},
+	{
+		"group": "CrowdStrike outage",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the CrowdStrike outage explainer.",
+		"path": "2026-08-24_crowdstrike_outage/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "BitTorrent architecture",
+		"title": "BitTorrent Architecture",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How BitTorrent scales with demand using hashed pieces, rarest-first, tit-for-tat, Kademlia DHT, and LEDBAT.",
+		"path": "2026-08-21_bittorrent_architecture/bittorrent_architecture.md",
+		"format": "markdown"
+	},
+	{
+		"group": "BitTorrent architecture",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the BitTorrent architecture explainer.",
+		"path": "2026-08-21_bittorrent_architecture/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Starlink networking",
+		"title": "Starlink Networking",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Starlink routes over moving satellites using ephemeris prediction, 15-second scheduling, laser links, and ground PoPs.",
+		"path": "2026-08-09_starlink_networking/starlink_networking.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Starlink networking",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Starlink networking explainer.",
+		"path": "2026-08-09_starlink_networking/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Snowflake architecture",
+		"title": "Snowflake Architecture",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Snowflake separates storage from compute, using immutable micro-partitions, pruning, time travel, and elastic warehouses.",
+		"path": "2026-07-30_snowflake_architecture/snowflake_architecture.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Snowflake architecture",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Snowflake architecture explainer.",
+		"path": "2026-07-30_snowflake_architecture/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Amazon infrastructure spend",
+		"title": "Amazon Infrastructure Spend",
+		"kind": "Architecture explainer · Markdown",
+		"description": "Why AWS builds its own servers, networks, and protocols, plus cells, shuffle sharding, and formal proofs.",
+		"path": "2026-07-25_amazon_infrastructure_spend/amazon_infrastructure_spend.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Amazon infrastructure spend",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Amazon infrastructure spend explainer.",
+		"path": "2026-07-25_amazon_infrastructure_spend/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Cloudflare attack mitigation",
+		"title": "Cloudflare Attack Mitigation",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Cloudflare's anycast, identical servers, Quicksilver, XDP, and isolates absorb record DDoS attacks automatically.",
+		"path": "2026-07-23_cloudflare_attack_mitigation/cloudflare_attack_mitigation.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Cloudflare attack mitigation",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Cloudflare attack mitigation explainer.",
+		"path": "2026-07-23_cloudflare_attack_mitigation/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Reddit architecture",
+		"title": "Reddit Architecture",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Reddit separates facts from precomputed answers using ranking math, permacache, layered caching, and GraphQL migration.",
+		"path": "2026-07-18_reddit_architecture/reddit_architecture.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Reddit architecture",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Reddit architecture explainer.",
+		"path": "2026-07-18_reddit_architecture/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Jira rebuild",
+		"title": "Jira Rebuild",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Jira Cloud uses per-tenant databases, tenant routing, reconciled search, compiled JQL, and in-query permissions.",
+		"path": "2026-07-16_jira_rebuild/jira_rebuild.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Jira rebuild",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Jira rebuild explainer.",
+		"path": "2026-07-16_jira_rebuild/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Airtable row limits",
+		"title": "Airtable Row Limits",
+		"kind": "Architecture explainer · Markdown",
+		"description": "Why Airtable holds each base in one worker's memory, causing row limits, and its Rust rewrite.",
+		"path": "2026-07-14_airtable_row_limits/airtable_row_limits.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Airtable row limits",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Airtable row limits explainer.",
+		"path": "2026-07-14_airtable_row_limits/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Slack real-time connections",
+		"title": "Slack Real-Time Connections",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Slack delivers real-time messages with Flannel edge caches, channel servers, Vitess, Kafka queues, and Nebula.",
+		"path": "2026-07-12_slack_realtime_connections/slack_realtime_connections.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Slack real-time connections",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Slack real-time connections explainer.",
+		"path": "2026-07-12_slack_realtime_connections/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "YouTube video delivery",
+		"title": "YouTube Video Delivery",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How YouTube transcodes uploads on custom chips, scales MySQL with Vitess, and serves video from ISP caches.",
+		"path": "2026-07-10_youtube_video_delivery/youtube_video_delivery.md",
+		"format": "markdown"
+	},
+	{
+		"group": "YouTube video delivery",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the YouTube video delivery explainer.",
+		"path": "2026-07-10_youtube_video_delivery/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Gmail architecture",
+		"title": "Gmail Architecture",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Gmail keeps every email durable, consistent, and searchable with labels, Spanner, TrueTime, and per-user indexes.",
+		"path": "2026-07-08_gmail_architecture/gmail_architecture.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Gmail architecture",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Gmail architecture explainer.",
+		"path": "2026-07-08_gmail_architecture/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Datadog outage",
+		"title": "Datadog Outage",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How one systemd update erased Cilium routing rules in every region, and lessons on shared dependencies.",
+		"path": "2026-07-06_datadog_outage/datadog_outage.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Datadog outage",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Datadog outage explainer.",
+		"path": "2026-07-06_datadog_outage/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Google Colab free GPUs",
+		"title": "Google Colab Free GPUs",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Colab safely runs strangers' code using gVisor sandboxes, disposable runtimes, and rationed GPU pools.",
+		"path": "2026-07-04_google_colab_free_gpus/google_colab_free_gpus.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Google Colab free GPUs",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Google Colab free GPUs explainer.",
+		"path": "2026-07-04_google_colab_free_gpus/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Google Maps traffic",
+		"title": "Google Maps Traffic",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Google Maps routes against predicted traffic using precomputed hierarchies, crowd-sourced speeds, and S2 indexing.",
+		"path": "2026-06-30_google_maps_traffic/google_maps_traffic.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Google Maps traffic",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Google Maps traffic explainer.",
+		"path": "2026-06-30_google_maps_traffic/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Stripe payments",
+		"title": "Stripe Payments",
+		"kind": "Architecture explainer · Markdown",
+		"description": "Why Stripe kept its huge Ruby monolith and built Sorbet, selective testing, and custom tooling.",
+		"path": "2026-06-27_stripe_payments/stripe_payments.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Stripe payments",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Stripe payments explainer.",
+		"path": "2026-06-27_stripe_payments/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "WhatsApp architecture",
+		"title": "WhatsApp Architecture",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How WhatsApp served billions with Erlang, millions of connections per server, store-and-forward, and encryption.",
+		"path": "2026-06-25_whatsapp_architecture/whatsapp_architecture.md",
+		"format": "markdown"
+	},
+	{
+		"group": "WhatsApp architecture",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the WhatsApp architecture explainer.",
+		"path": "2026-06-25_whatsapp_architecture/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Google Search",
+		"title": "Google Search",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Google precomputes an inverted index, fans queries across shards, tames tail latency, and ranks results.",
+		"path": "2026-06-20_google_search/google_search.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Google Search",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Google Search explainer.",
+		"path": "2026-06-20_google_search/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Roblox scaling",
+		"title": "Roblox Scaling",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Roblox scales with tiny game instances, Luau sandboxing, matchmaking, owned hardware, and cellular isolation.",
+		"path": "2026-06-18_roblox_scaling/roblox_scaling.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Roblox scaling",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Roblox scaling explainer.",
+		"path": "2026-06-18_roblox_scaling/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "TikTok recommendations",
+		"title": "TikTok Recommendations",
+		"kind": "Architecture explainer · Markdown",
+		"description": "TikTok's Monolith real-time learning: collisionless embeddings, streaming feature joins, and separate training and serving.",
+		"path": "2026-06-16_tiktok_recommendations/tiktok_recommendations.md",
+		"format": "markdown"
+	},
+	{
+		"group": "TikTok recommendations",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the TikTok recommendations explainer.",
+		"path": "2026-06-16_tiktok_recommendations/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Replit agents",
+		"title": "Replit Agents",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Replit gives AI agents full cloud environments with strong isolation, snapshots, and safe deployment.",
+		"path": "2026-06-13_replit_agents/replit_agents.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Replit agents",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Replit agents explainer.",
+		"path": "2026-06-13_replit_agents/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "DeepSeek training",
+		"title": "DeepSeek Training",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How hardware-aware co-design, sparse MoE, MLA, and FP8 training cut DeepSeek's training compute costs.",
+		"path": "2026-06-11_deepseek_training/deepseek_training.md",
+		"format": "markdown"
+	},
+	{
+		"group": "DeepSeek training",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the DeepSeek training explainer.",
+		"path": "2026-06-11_deepseek_training/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Discord message storage",
+		"title": "Discord Message Storage",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Discord stores trillions of messages, from Cassandra hot partitions to Rust coalescing and ScyllaDB.",
+		"path": "2026-06-09_discord_message_storage/discord_message_storage.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Discord message storage",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Discord message storage explainer.",
+		"path": "2026-06-09_discord_message_storage/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Dropbox leaving AWS",
+		"title": "Dropbox Leaving AWS",
+		"kind": "Architecture explainer · Markdown",
+		"description": "Why Dropbox moved file storage from S3 to Magic Pocket: cost, erasure coding, SMR, migration.",
+		"path": "2026-06-07_dropbox_leaving_aws/dropbox_leaving_aws.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Dropbox leaving AWS",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Dropbox leaving AWS explainer.",
+		"path": "2026-06-07_dropbox_leaving_aws/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Notion database design",
+		"title": "Notion's Database Design",
+		"kind": "Architecture explainer · Markdown",
+		"description": "Notion's block data model, its permission tree walks, workspace sharding, and a separate analytics data lake.",
+		"path": "2026-06-05_notion_database_design/notion_database_design.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Notion database design",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Notion database design explainer.",
+		"path": "2026-06-05_notion_database_design/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Instagram Postgres scaling",
+		"title": "Instagram and PostgreSQL",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How Instagram scaled PostgreSQL with PgBouncer, logical shards, Snowflake-style IDs, and underused Postgres features.",
+		"path": "2026-06-03_instagram_postgres_scaling/instagram_postgres_scaling.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Instagram Postgres scaling",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the Instagram Postgres scaling explainer.",
+		"path": "2026-06-03_instagram_postgres_scaling/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Replication",
+		"title": "Replication",
+		"kind": "Architecture explainer · Markdown",
+		"description": "Replication as fault tolerance across databases, load balancers, brokers, caches, and regions, including its limits.",
+		"path": "2026-05-22_replication/replication.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Replication",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the replication explainer.",
+		"path": "2026-05-22_replication/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Cache invalidation",
+		"title": "Cache Invalidation",
+		"kind": "Architecture explainer · Markdown",
+		"description": "Keeping caches fresh with CDC, tags, versioned keys, stampede protection, and multi-layer invalidation propagation.",
+		"path": "2026-05-20_cache_invalidation/cache_invalidation.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Cache invalidation",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the cache invalidation explainer.",
+		"path": "2026-05-20_cache_invalidation/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Consistent hashing",
+		"title": "Consistent Hashing",
+		"kind": "Architecture explainer · Markdown",
+		"description": "Why modulo hashing breaks on resize and how hash rings with virtual nodes bound disruption.",
+		"path": "2026-05-18_consistent_hashing/consistent_hashing.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Consistent hashing",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the consistent hashing explainer.",
+		"path": "2026-05-18_consistent_hashing/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Connection pooling",
+		"title": "Database Connection Pooling",
+		"kind": "Architecture explainer · Markdown",
+		"description": "Why PostgreSQL connections are costly, plus PgBouncer modes, pool sizing, connection storms, and health metrics.",
+		"path": "2026-05-16_connection_pooling/connection_pooling.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Connection pooling",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the connection pooling explainer.",
+		"path": "2026-05-16_connection_pooling/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Distributed locks",
+		"title": "Distributed Locks",
+		"kind": "Architecture explainer · Markdown",
+		"description": "Why TTL-based locks fail under process pauses, and how leases and fencing tokens restore safety.",
+		"path": "2026-05-12_distributed_locks/distributed_locks.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Distributed locks",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the distributed locks explainer.",
+		"path": "2026-05-12_distributed_locks/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Backpressure",
+		"title": "Backpressure",
+		"kind": "Architecture explainer · Markdown",
+		"description": "How systems detect overload and respond with bounded queues, load shedding, 429s, and circuit breakers.",
+		"path": "2026-05-04_backpressure/backpressure.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Backpressure",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the backpressure explainer.",
+		"path": "2026-05-04_backpressure/transcript.txt",
+		"format": "text"
+	},
+	{
+		"group": "Distributed job scheduler",
+		"title": "Distributed Job Scheduler",
+		"kind": "Architecture explainer · Markdown",
+		"description": "Leader election, idempotency keys, priority queues, and heartbeat recovery for reliable scheduled background jobs.",
+		"path": "2026-04-30_distributed_job_scheduler/distributed_job_scheduler.md",
+		"format": "markdown"
+	},
+	{
+		"group": "Distributed job scheduler",
+		"title": "Source transcript",
+		"kind": "Research source · Plain text",
+		"description": "The source transcript used to prepare the distributed job scheduler explainer.",
+		"path": "2026-04-30_distributed_job_scheduler/transcript.txt",
+		"format": "text"
+	}
+]

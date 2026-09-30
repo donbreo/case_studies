@@ -1,0 +1,580 @@
+In late 2025, someone launched the largest DDoS attack in history against a Cloudflare customer. Its
+capacity was about 31.4 terabits per second. It lasted 35 seconds . To give you an idea of the
+scale: the previous record-breaking attack that same year reached about 22 terabits. This is roughly
+equivalent to a million people simultaneously streaming 4K video aimed at a single victim. And a
+very important detail, which we will analyze in more detail in this video: no one at Cloudflare was
+involved in manually repelling this attack. The sirens didn't go off, the crisis management team
+didn't meet, and no one worked overtime. The attack was detected and repelled automatically at every
+Cloudflare location simultaneously. The engineers learned about the record set from their dashboards
+after it was all over. In this video, we'll also answer a question that at first seems completely
+absurd: why one of the world's largest internet infrastructure companies uses a lava lamp wall to
+secure HTTPS. So stay with us until the end of the video if you want to know the exact answer to
+this question. Cloudflare powers about a fifth of all websites on the internet. Its network covers
+over 330 cities with a bandwidth of over 500 terabits per second. Early on, Cloudflare made a key
+architectural decision that continues to shape their operations today. This decision directly
+contradicts the way most companies build software. Most internet companies specialize, right? A
+separate group of servers for storage, a separate one for computing, and separate centers for
+cleaning traffic from attacks. But Cloudflare did exactly the opposite. Instead of creating
+specialized servers, Cloudflare has made almost every server completely interchangeable. The same
+platform runs almost every product, and each machine contains all the customer configurations and
+broadcasts the same IP address from hundreds of cities around the world. In this video, we'll look
+at seven unique system design and architecture decisions made by the Cloudflare team. First, how
+Cloudflare convinced the internet that hundreds of data centers were the same destination, why this
+helped them solve the problems of global load balancing and DDoS protection at the same time, and
+how they used a routing technique called “anycast.” Secondly, why Cloudflare abandoned the creation
+of specialized server parks and how a single homogeneous network allows any machine to handle almost
+any request. Third, how Cloudflare updates every server on the planet with all customers'
+configurations in seconds using a system called " Quicks." Fourth, it is autonomous protection, a
+daemon on each server that detects attacks and independently creates blocking rules at the kernel
+level, so record attacks are reported after the fact, instead of the team fighting them in real
+time. Fifth, is how Cloudflare created a serverless platform that launches in seconds, executing
+user code in browser-like sandboxes instead of virtual machines, isolating each client from the
+others. Sixth—this is how Cloudflare made the internet faster than it should be by default. They
+created the Argo system, which measures real-time latency across the entire internet and routes
+traffic around congestion. It perceives the billions of requests it is already processing as a
+living map. The seventh concerns Durable Objects—the way Cloudflare handles state that thousands of
+users update simultaneously, such as in a chat or shared document, by deliberately breaking its own
+distributed model and storing data in only one place on Earth. This video is for backend
+infrastructure and network engineers, as well as anyone who manages multi-tenant or builds scalable
+systems. Everything in this video is taken from Cloudflare's engineering blog, which is probably the
+most detailed of any infrastructure company, as well as articles on Quicksilver and Pingora, Marik
+Majowski's series on DDoS, Kenten Wada's articles on Workers, and their posts on Argo smart routing
+and Keyless SSL. I simply researched all this publicly available information and systematized it in
+the form of these diagrams. So this will be a very visual video. Stay until the end because the last
+two chapters are the most important. So let's begin. Let's discuss the first solution—the Cloudflare
+address space. Typically, one IP address represents one location. Traditional CDNs supported this
+and managed users using DNS. So when you resolve a domain name, their DNS looks at where you're
+coming from and gives you the address of the closest server. The intelligence was contained in the
+mapping system, and this system was a major engineering project that had to be built, operated, and
+maintained. But Cloudflare bypassed all of that. Their addresses use Anycast. This is the same IP
+prefix that is advertised over BGP— a protocol that networks use to tell each other what routes
+exist, from every data center on the planet at the same time. To the internet, Cloudflare appears as
+a single destination, accessible from anywhere, and every router in the world simply forwards the
+data to the closest BGP route it knows. Therefore, your packets end up in the nearest city with
+Cloudflare without anyone else's individual choice, as the routing table decides. This leads to
+three different results. The first is the lack of a global load balancer, as BGP performs the role
+of the balancer . This also means they didn't have to build a mapping system , and there's no
+control node that could fail. Therefore, adding a new city to the network does not require any
+migration. By city, I mean a new data center in a new city with lots of servers owned by Cloudflare.
+So, you just need to install the servers in the racks. You start announcing routes, and traffic from
+nearby regions starts flowing in on its own, taking the shortest path. I hope it is now quite clear
+that all servers have the same IP address, as you can see, and all cities also have the same IP
+address. So a person in Tokyo and a person in Dubai see the same IP address, but are actually
+redirected to their own city. And thanks to this, the third result of choosing such an architecture
+arises, which determines the company's security architecture. As you know, a botnet is thousands of
+infected machines scattered across the planet. But in the case of Cloudflare, packets from each
+infected machine obey the same routing rules we just discussed. They go to the Cloudflare server in
+the city closest to the specific machine. Therefore, a multiterabit attack originating from
+thousands of networks around the world arrives in thin fragments. They are distributed among 330
+cities, and each city sees only its regional share. So, no one at Cloudflare is distributing the
+attack. The internet's own routing dissipates it before any security code can work. If this doesn't
+make sense to you and you're not very familiar with DDoS attacks and fragmentation, let me explain
+more clearly. Let's say there is a botnet of hundreds of servers. All of these servers are infected.
+You would think that such a botnet could generate millions of requests and really bring the system
+down. And that's true. In conventional systems, this is exactly how it works. All these servers from
+different parts of the world start attacking the system, and it " crashes" because it can't handle
+so many requests. But here's what's happening with Cloudflare: one of the infected servers is in
+Tokyo, and the other is in Dubai. So, there are two different infected servers. Although they are
+part of the same botnet, and there may be hundreds of such infected servers, they are all located in
+different cities. So when this server attacks the system, requests from it and many other servers in
+Tokyo are routed only to the Tokyo data centers. Whereas requests from infected machines in Dubai
+are routed to a data center in Dubai. While it may seem like an entire botnet is attacking one
+specific system, in the case of Cloudflare, that's not exactly the case. Infected machines from
+Tokyo attack only the Tokyo data center, and infected machines from Dubai attack only the Dubai data
+center. This is why data centers in Tokyo and Dubai can handle these attacks so easily: they are not
+millions of requests, but only hundreds of requests from hundreds of servers. This is called traffic
+segmentation , and it only works because they have the same IP addresses, but follow the shortest
+path rule thanks to BGP, which routes all that traffic to the closest location to that particular
+server. OK. So, 99% of you already know all this: about segmentation, BGP, Anycast, and how DDoS
+attacks work. But if you did n't know, I just explained everything more clearly. Now there's
+something else that Cloudflare did a little differently. The conventional wisdom at the time was
+that Anycast worked great for DNS, where each request was just one packet. But this was not the best
+solution for long-running TCP connections. So, why is that ? Because a DNS request is just one
+packet. You ask a question, get an answer, and you're done. So it doesn't matter which data center
+is responsible for it . But a regular web request is not a single packet. This is a TCP connection.
+This is a two-way communication that lasts a few seconds and consists of many packets. And the data
+center that processes it tracks this conversation in its own memory. And this memory is stored on
+that one machine in that one city and nowhere else . So people were worried about that. What if the
+internet routing changed mid- connection and your next packet was suddenly sent to a different
+Cloudflare city that had never seen this conversation and had no idea what to do with that
+particular packet? So the connection would just break, right ? That's why the conventional wisdom
+has always been that Anycast would be fine for DNS, but not for long-running connections like HTTP
+and HTTPS. But in practice, Cloudflare found something different. They found out that this almost
+never happens. Internet routes are actually stable enough that the path remains the same for the few
+seconds it takes to connect. And the fear that everyone had —that the routing would change in the
+middle of a conversation— didn't actually come true. So Cloudflare figured out that routing doesn't
+change in the middle of a conversation, and what everyone feared was so rare that it didn't matter.
+So, Cloudflare was able to make Anycast work not just for DNS, but also for HTTP, HTTPS, and
+eventually pretty much anything Cloudflare ran. It's unlikely, but it's possible that you've already
+used Anycast without even knowing it. Cloudflare operates a public DNS service called 1.1.1.1, which
+you can specify in your device's network settings, and it will look up websites for you. This works
+the same way as Google's 8.8.8.8 service. This single address, 1.1.1.1, is served by every
+Cloudflare data center on the planet. So when you use it, your request goes to the nearest node—
+it's the same Anycast trick we just looked at, only aimed at their own product. So , it is Anycast
+that decides which Cloudflare data center your packet will go to, that is, essentially, which city.
+Now let's talk about what happens when the packet reaches the data center. If you walk into any
+Cloudflare data center in any city where they have a presence, the server racks will look pretty
+much the same. There is no separate server park for DNS. There is no separate park for firewalls or
+for processing requests. Each individual server runs the entire software stack. DNS caching, TLS
+termination, web firewall, bot control, DDoS protection systems—all of it. And any of these servers
+can fully process a request for any of the millions of domains on the platform. But let's compare
+this to the standard traditional model. In most companies, infrastructure is focused on specific
+products. One cluster of servers is responsible for searching. Another cluster is for data storage.
+Each of these clusters has its own forecasting, its own provisioning, and its own excess capacity.
+But when one of the products suddenly becomes popular, the traditional architecture faces a problem.
+The server cluster for this product is overloaded, while capacity in neighboring clusters remains
+idle. But Cloudflare has no such boundaries . At Cloudflare, every server can run almost any
+product. Therefore, computing power is not tied to individual services, but is distributed across
+the entire equipment fleet. If the load on one product increases dramatically, it can borrow
+resources from any machine in that city, because those machines are already capable of servicing it.
+This fundamentally changes capacity planning. Instead of asking, “ How many servers do I need for a
+CDN, how many for request handlers, how many for a WAF (web firewall)?” Instead of all this,
+Cloudflare asks just one question. How much computing power does this city need? New product
+launches also change because the new product is not deployed on new hardware. It deploys on the
+hardware that already exists. So, as soon as the data processing software is released, it becomes
+available almost immediately in every Cloudflare data center, drawing on the power of the entire
+network. When traffic arrives at the data center, another system takes over control. This is a load
+balancer called Unimog, built on XTP—a Linux kernel technology that we'll talk about later ; it
+distributes incoming connections between all healthy servers. So, even within a single data center,
+there are no dedicated workstations or separate servers just for CDN. Any healthy server can handle
+almost any request, and Cloudflare has removed as many limits as possible within its server fleet.
+This is one platform, one park, and one shared pool of capacity. This is what makes the architecture
+so flexible, but at the same time creates a rigid requirement. If almost any server can serve almost
+any client, then almost every server must have information about every client. This means it must
+have all the data about their certificates, DNS records, firewall rules, redirects—everything must
+be available locally, because the server handling the request cannot stop and ask another machine
+for the client's configuration. It is to solve this problem that Cloudflare created a system called
+Quicksilver. Every time someone clicks “ save” in the Cloudflare dashboard to change a DNS record,
+firewall rule, or anything else, that change has to reach every Cloudflare server in every city on
+Earth. And Cloudflare accomplishes this task in seconds. Imagine: you change the configuration in
+one place, and within seconds, tens of thousands of servers around the world start working
+differently because of this single parameter. To make all of this possible, Cloudflare created a
+distributed configuration system called Quicksilver; It replaced the out-of-the-box Kyoto Tycoon
+key-value store after Cloudflare pushed far beyond its design limitations. Quicksilver's success is
+due to two unconventional design decisions . The first solution is quite radical: each server stores
+the entire global data set. There is no partitioning or caching of hot keys, each machine contains
+the full configuration for each Cloudflare customer, running into hundreds of gigabytes. The second
+solution concerns the storage mechanism itself . Instead of building your own database from scratch,
+Quicksilver uses LMDB—an in-memory B- tree mapped database optimized for ultra-fast parallel reads .
+And that's exactly what Cloudflare needed. A single HTTP request can ask Quicksilver dozens of
+times: which TLS certificate to use, which firewall rules to apply, which origin server to connect
+to, which features are enabled for that client. Each of these requests is simply a local read from
+memory, measured in microseconds. Now imagine that each of these questions required a network
+request to the central configuration service, then it would take more time to retrieve the settings
+than to service the client. And at the scale of Cloudflare, it simply wouldn't work . So instead of
+speeding up network configurations, Cloudflare made network requests unnecessary at all . And if you
+saw my video about Jira system design, it's almost the opposite architecture. Atlassian provides
+each client with their own database. This means that every query starts with the same question .
+Where is this client located? To address this, Jira created a system called TCS, while Cloudflare
+took the opposite direction. So there are no routing issues, and almost every server already has
+local configurations for all clients. So, data searches disappear completely. But now a new
+challenge arises. Every configuration change must be replicated throughout the network. So
+Cloudflare decided to charge a price when writing, so that reading this data would be almost free.
+There's one thing you should remember from this section: it only takes a few seconds for Cloudflare
+to propagate all changes to all servers around the world. And this is possible thanks to
+Quicksilver. This speed, provided by Quicksilver, is Cloudflare's main advantage during DDoS
+attacks. But later in the video I will show how this causes the slightest mistake to instantly
+spread throughout the network. Earlier in the video, I mentioned traffic clearing centers. If you
+don't work with cloud infrastructure, the name " clearing centers" may sound quite strange. But the
+traditional DDoS protection industry is actually built around such centers—a small number of
+specialized facilities with huge bandwidth . When an attack is detected, the victim's traffic is
+redirected through such a center. There it is cleaned and sent onward. But each stage of this
+purification process has its own price. Detection and redirection take minutes, and such a
+workaround also adds delays to all legitimate traffic. In addition, there is another limitation.
+Your protection is ultimately limited by the total capacity of these purification centers. If you
+build a capacity that can absorb, say, 20 terabits per second of attack, then that will be your
+limit or " ceiling." But Cloudflare took a different approach. Cloudflare has no clearing centers at
+all. Each Cloudflare data center is part of a security system. If you remember what Anycast does
+that I mentioned earlier: the same IP address exists in every Cloudflare location. Therefore,
+Internet routing naturally directs traffic to the nearest data center. So, if it's a 30 terabit
+attack, but it's being carried out from different machines around the world, then locally for each
+data center in each city it will only be a small spike, not a powerful attack. Because Cloudflare
+has 330 cities, even large attacks of 31.4 terabits look like tiny bursts. This means that a single
+Cloudflare server is not trying to absorb the entire 31.4 terabit attack. His task is much simpler.
+It identifies and intercepts the few gigabits of malicious traffic that come to that particular
+server, as the traffic is distributed across cities, and even a large 31.4 terabit attack doesn't
+come close to the network's capacity of over 550 terabits. The intensity of modern attacks makes
+another point imperative: approximately 9 out of 10 network-level attacks last less than 10 minutes.
+In fact, some of the largest attacks recorded by Cloudflare lasted much less. A few years ago, there
+was a 7.3 terabit attack that delivered its entire volume in 45 seconds, and the 31.4 terabit attack
+we're talking about—the record-breaking attack of 2025 —lasted just 35 seconds. Therefore, a
+prerequisite is to exclude the person from this process, because they will not even have time to
+approach the keyboard when the attack ends. That is why there are no people in the protection level
+. The first stage is detection. Each server runs a small background program called DOS. This stands
+for " denial of service daemon", it selectively inspects packets passing through the network card,
+looking for statistical signs of an attack and creating a fingerprint by analyzing the
+characteristics of the packets, which allows you to distinguish malicious traffic from legitimate
+traffic. Once a fingerprint is generated , Cloudflare immediately sets a rule on the server that
+tells it to drop every packet that matches that fingerprint. So the next time a matching packet
+arrives, it is instantly discarded without spending any additional resources. There are no requests
+to the central node that could add latency. Additionally, Cloudflare has a global discovery system
+that monitors traffic across the network for patterns that only become visible when data from all
+cities is combined. Therefore, once the system determines a reliable fingerprint, Quicksilver
+distributes it to all servers within seconds. The second level is where these rules are actually
+enforced. Once you have identified a malicious package, a simple question arises. How quickly can I
+get rid of this malicious package? Cloudflare runs its filtering rules in XDP, which stands for "
+eXpress Data Path". Let me give you a little context if you're not an expert on Linux internals. So,
+Linux supports a technology called eBPF, which allows developers to load small, tested programs
+directly into the kernel. These programs can run at several points in the network stack, and one of
+them is XDP, the very first moment a packet enters the system. Imagine a packet arriving on a Linux
+server. The packet just came from the network card. The kernel has not yet had time to allocate
+memory for it. It didn't even enter the TCP/IP stack. And up to this point, almost no work has been
+done. So if a packet matches a DDoS fingerprint, Cloudflare drops it right on the spot. No time is
+wasted on processing it and no memory is wasted on buffering. According to Cloudflare's experience,
+this is ten times cheaper than dropping the same packet later through iptables. And their philosophy
+is simple. The cheapest package is not the one you process efficiently . This is one that you don't
+have to handle at all . When you combine these two factors, you get a completely different kind of
+DDoS protection. The system does not wait for a person to recognize an attack. It detects it,
+creates a fingerprint, applies mitigations, and automatically starts dropping packets. This is why
+the largest DDoS attacks in history are mitigated in milliseconds, long before a human intervenes.
+And you can see it in the record books. Throughout 2025, records for the largest publicly disclosed
+DDoS attacks were constantly updated. 5.6 terabits per second in January, 7.3 in May, 11.5 in
+September, 22.2 a few weeks later, and finally 31.4 terabits per second at the end of 2025. Each of
+these attacks was detected and mitigated automatically. Throughout the year, Cloudflare systems
+mitigated an average of over 5,000 attacks every hour. There is no scaling option with people in the
+loop that could work or even facilitate the process. During one of the campaigns at the end of the
+year, attackers even attacked Cloudflare's own control panel and infrastructure . So the same
+autonomous systems protected them too. This ability— to mitigate attacks cheaply, automatically, and
+at scale—has enabled one of the most unusual business decisions in Cloudflare's history, and we'll
+take a look at it now. Since 2017, Cloudflare's DDoS protection has been unlimited for all plans,
+including the free one. This means that a free blog gets the same protection from attacks as a bank.
+Cloudflare's competitors bill for mitigation based on the volume of gigabits. Cloudflare even
+includes this in its free plan because it has built its network so that protecting even one more
+site becomes extremely cheap. There are three reasons why this happens. First, protecting another
+website costs almost nothing. The infrastructure is already in place, and each server is already
+running a full software stack . Anycast already distributes all traffic, and XDP already cheaply
+intercepts malicious packets. This means that adding another client is mostly a configuration update
+through Quicksilver, rather than creating a new infrastructure . Second, every free client makes
+protection better. So, millions of small sites are exposed to new attack methods long before they
+reach large banks or Fortune 500 companies. When DoS, as we discussed earlier, learns a new “
+fingerprint” while protecting someone’s personal blog, Quicksilver spreads it across the network in
+seconds. And the next attack is recognized instantly, regardless of who it is aimed at. So the free
+tier is not just traffic, it's a global network of sensors. Third, the free tier makes the network
+itself cheaper to maintain. Cloudflare now serves such a large portion of the internet that ISPs
+have a strong incentive to connect directly to its network via free peering. More peering means
+Cloudflare pays less to transfer traffic, and lower network costs make the free tier affordable. The
+free tier also attracts more sites, and these additional sites make Cloudflare an even more
+attractive peering network. So, this is the flywheel that drives the internet economy. And this is
+not the first time Cloudflare has used such a strategy. Back in 2014, the company made TLS
+certificates free for every customer through Universal SSL, more than a year before Let's Encrypt
+launched. According to Cloudflare's estimates, enabling this feature almost overnight doubled the
+number of encrypted sites on the Internet. Because every Cloudflare server was already capable of
+handling HTTPS traffic, protecting millions of additional sites did not require the creation of new
+infrastructure . This was mostly a configuration change. So, up until now, each server in the
+Cloudflare network was only responsible for transmitting traffic and protecting it. But in 2017,
+Cloudflare decided that these same servers should also execute client code. And the way they
+implemented it is probably the most impressive engineering decision in this entire architecture. But
+first, let's take a short break. Before we delve any further, I want to take a few seconds to tell
+you about a group I get together every few months. It's called Algor Cohort, and we're looking at
+advanced systems design and architecture for a post-AI world. These are usually senior engineers
+such as SREs, platform engineers, lead engineers, enterprise solution architects, and VPs of
+engineering. There are people there with experience ranging from 5 to 26 years. And it's a great way
+to learn from real-world cases from production environments . So, I want you to take a look at the
+algor.io website, this is algor.io, and familiarize yourself with the topics that we're going to
+cover in this course. We will look at modern systems: how Anthropic works with language models, how
+Hugging Face supports so many sandboxes for AI models, and how Together AI hosts many open source
+models at scale. This is a 12- week intensive program. If you are interested in these topics, fill
+out the form that appears after clicking the " book" or " register" button above. Once you fill out
+the form, I will check if you are a good fit for us and we will arrange a call. There are generally
+two different programs. The $2,400 program is one where I personally train a small group of
+engineers. There's a huge waiting list because I can only accept a few people and I only do it when
+I have time after work. The recommended option is to access class recordings. It only costs $800.
+Getting a refund from your company is very easy. If you are just starting out in your career and new
+to engineering, this course may not be relevant to you. So you don't have to fill out the form.
+Okay, back to the video. Cloudflare Workers had to solve one problem: how to run untrusted code for
+hundreds of thousands of different clients on every server in the network alongside systems serving
+other traffic. Quick note: if you don't know what workers are, I do n't mean employees. I mean
+computer programs that run asynchronously. I clarify this because sometimes juniors watch us, and
+they don't always understand what I mean by "workers ." So, there are two industry standard
+solutions for running untested code on machines . These are two commonly accepted approaches. The
+first option is virtual machines (VMs). As you know, they have powerful protection, but they are
+very heavy because they take seconds to start and consume significantly more memory per client. The
+second option is containers. They are lighter, but their " cold start" still takes hundreds of
+milliseconds and requires tens of megabytes of memory for each. But Cloudflare chose something
+different. They chose V8 isolates. This is the same sandbox technology that Chrome uses to prevent
+one compromised browser tab from affecting another. A single operating system process runs the V8
+JavaScript engine , and within that process live thousands of isolates— independent JavaScript
+runtimes, each with its own stack and execution context. Creating a new isolate takes only a few
+milliseconds and consumes only a few megabytes of memory. According to Cloudflare's published data,
+this system actually runs 100 times faster than a container, consuming only a tenth of its memory.
+And the reason Cloudflare cares so much about lightweight isolates is for placement density . If
+each worker consumed hundreds of megabytes like a virtual machine, only a few of them could be
+hosted on each server. And while consuming several megabytes, each server can simultaneously hold a
+huge number of workers in memory. And this fundamentally changes the deployment process. Publishing
+a worker does not mean choosing the region where it should run. The worker is simply sent to the
+entire server park . And almost every Cloudflare server is capable of running it. And if you think
+about it, this is the same architectural idea that we've seen throughout this video: now almost any
+server can run the code of almost any client. And that's not all. They also solved one of the
+biggest problems with serverless platforms—cold starts. And this solution only works for Cloudflare
+, because Cloudflare is located right at the edge of the internet. So when your browser opens a TLS
+connection, the first message, called "client hello" , already contains the name of the host it is
+addressing, in a field called SNI. And this happens before the TLS handshake is even complete and
+before the HTTP request appears. But this is enough for Cloudflare to understand which worker will
+ultimately handle this particular request. Therefore, instead of waiting for the HTTP request to
+arrive, Cloudflare starts loading the worker isolate during the handshake itself . The network still
+takes a few milliseconds to complete TLS. So the isolate only needs a few milliseconds to run. So,
+these two things can happen in parallel, and by the time the first HTTP request arrives, the worker
+is ready to go. So cold start hasn't disappeared . Cloudflare simply hid it inside the latency that
+the connection is still paying for. Now, running thousands of clients within a single process
+naturally raises an interesting question: what prevents one client's code from reading the memory of
+another? And Cloudflare took a really strange approach to answering this question. They removed the
+concept of time inside the worker process. I know this sounds silly, but let's talk about it in the
+next section. For years, Cloudflare's architecture worked quite well, but then a vulnerability
+emerged that shattered one of the fundamental assumptions of the internet. In 2018, Spectre
+happened. So, Spectre was not a bug in JavaScript. This was a vulnerability in modern processors.
+Modern processors use a method called speculative execution, where they try to predict what your
+program will do next and start executing those instructions without knowing if they will be needed.
+So, if the prediction turns out to be wrong, the processor discards those calculations, but does not
+erase all the side effects. Some of these side effects remain in the processor cache. Inspector
+showed that even rejected assumptions can leave traces in the cache, and attackers can use these
+traces to gain access to data they were not supposed to see. And the way attackers do this is very
+inventive. They carefully measure tiny discrepancies in time, and this can reveal data they
+shouldn't have access to. If you don't know how these attacks work, how Spectre works, how these
+timing discrepancies and speculative execution work—it's okay . You don't have to be a security
+engineer to know all this. But since I have a background in offensive safety, I'll try to explain it
+to you in a few words. This means that accessing data that is already in the processor cache is much
+faster than reading it from RAM. By measuring these tiny differences in time, an attacker can figure
+out which pieces of data the processor has secretly touched during speculative execution. This is a
+hardware problem and cannot be completely fixed through software. In other words, Spectre turns time
+into a channel for information leakage. The rest of the software industry had a common answer to
+this: separate processes and virtual machines for each client. But Cloudflare can't rely on this
+because, as you remember from the previous section , Cloudflare Workers are built on isolates, and
+thousands of them knowingly use the same operating system process. So Cloudflare had to approach the
+problem from a different angle. As Kenton Ward, the architect of Workers, points out, every Spectre
+attack is fundamentally a time attack, and every time attack requires a clock. So Cloudflare just
+took that watch away. Now, inside the worker, time does not pass while your code is executing . So,
+if you call it twice in a tight loop, you'll get the same result, no matter how much work was done
+in between. The clock only moves forward when your code performs input/output (IO ) operations. You
+cannot measure your own execution time. But attackers quickly found another way to create a highly
+accurate clock. Instead of relying on the system clock, they ran a second thread whose sole task was
+to increment a shared counter as fast as the processor would allow. Reading this meter actually gave
+them an accurate timer. But Cloudflare Workers closed this loophole as well. There are no streams
+there. There is no shared memory or shared array buffer inside the sandbox. So there's nowhere to
+create this counter. Therefore, the attackers further improved their attack. They started contacting
+a remote server to ask for the time. But using a remote server as a clock doesn't help with
+Cloudflare, as network latencies are measured in tens of milliseconds , completely negating the
+nanosecond time discrepancies required by Spectre. It's worth knowing that all of Cloudflare's
+measures to prevent Spectre attacks do not make Spectre theoretically impossible. This only makes
+data mining so slow that it ceases to be an attack. And Cloudflare has added another precaution. If
+a worker starts behaving as if it is carrying out a Spectre attack, Cloudflare moves it into its own
+operating system process, providing complete isolation with no changes to other processes. So
+imagine it like this. Everyone shares a common room until someone starts acting suspiciously , and
+then you start isolating that person. And finally, there is another layer of protection that
+Cloudflare uses. Workers actually run on Google's V8 engine. This means that V8 security fixes
+become Cloudflare security fixes. So when a new version of V8 is released, Cloudflare re-builds it
+and deploys it across the entire infrastructure within a few hours. Cloudflare Workers is a brand
+new runtime environment designed with these lessons in mind. But one critical part of the request
+pipeline was still written in C, and every request went through it, which remained Cloudflare's
+biggest security risk for years. In 2017, this risk finally became a reality. In February 2017,
+Travis Orandi from Google Project Zero contacted Cloudflare with some very bad news. He discovered
+that a bug in Cloudflare's front-end software could, under certain conditions, cause server memory
+fragments to leak in HTTP responses. That in itself would be very serious. But in Cloudflare's
+architecture, it was much worse. If you remember what we discussed throughout this video: a single
+process handles traffic from many different clients. So the memory that was next to one client's
+request did not necessarily belong to that client. It could contain cookies from another client with
+data like authentication tokens, parts of POST requests, and fragments of completely unrelated
+traffic. This bug was contained in the HTML parser, written in C. It was used by functions that
+rewrote pages "on the fly". And on certain malformed pages, this parser read data outside its
+allocated buffer. This means that instead of stopping where it should, it went into whatever was
+further in memory and returned those parts in HTTP responses. And the craziest thing is that some of
+these responses were even cached by search engines , making the stolen data publicly available to
+everyone. This vulnerability became known as Cloudbleed, it's a very, very well-known vulnerability,
+and it's a real nightmare for the sharing architecture that Cloudflare has. So what happens here is
+that the memory error is not limited to a single client process. It can expose the data of all other
+users as well. And Cloudbleed changed the direction of Cloudflare's engineering forever. So
+everywhere Cloudflare was writing code for new ways to handle requests. They translated it into the
+Rust programming language, and the most important example of this was a solution called Pingora.
+This is Cloudflare's replacement for Nginx on the origin-facing side. They started using it in
+production in 2022 and opened the source code in 2024. Nginx now runs multiple independent worker
+processes, each of which maintains its own persistent connections to the origin server. The trick is
+that all these pools are completely isolated from each other. So, if worker process A has an active
+authenticated connection to your server, process B cannot use it. So, worker process B has to open a
+completely new TCP connection and perform its own TLS handshake. At Cloudflare's scale, this means
+millions of unnecessary connections and handshakes every day, even if another process on the same
+machine already has a free connection ready to use. Pingora removes this limit, and instead of many
+independent worker processes, it is now a single multi-threaded process with a shared connection
+pool. And each thread here can reuse the same active connections to the source servers. And that
+means significantly fewer new TCP connections, fewer TLS handshakes, and less work for both
+Cloudflare and the origin servers behind it. Cloudflare's published metrics are impressive. Pingora
+now processes over 8 trillion requests per day, using approximately 70% less CPU time and 2/3 less
+RAM than the Nginx-based service it replaced. So, as we just established, the bug was contained in
+the legacy Cloudflare proxy server, which was a large C codebase that handled every request that
+passed through the network. And after Cloudbleed, Cloudflare began rewriting the business logic of
+this proxy in the Rust programming language. Historically, this logic existed in the form of Lua
+scripts built into Nginx. It was rewritten in Rust as a new engine, which they called FL2. Together,
+Pingora and FL2 modernized the software that handled every request that passed through Cloudflare's
+edge. But even perfect software has its limits. And when a request leaves Cloudflare and goes to
+your origin server, it still has to travel across the internet. And this path, as you know, is
+usually determined by the BGP protocol. But Cloudflare decided that this wasn't enough for them .
+Now, we spent most of this video inside the Cloudflare network. Now let's look at what happens after
+the request leaves the Cloudflare network. By default, Cloudflare does not choose how exactly this
+request will reach your regional server. The Internet does this using a protocol called BGP. BGP is
+a protocol that tells networks how to communicate with each other. But BGP was not designed to find
+the fastest path. It was created to find an accessible path. It makes routing decisions based on
+network policies and the sequence of networks a packet traverses, not based on performance. He
+doesn't know about delays and doesn't see congestion. A route that seems good for BGP can easily
+turn out to be slower than another one available at the same time. So the path your packets take
+over the internet is often not the fastest. And most companies simply have to accept the fact that
+they do not control Internet routing. They get the path that BGP chooses. Cloudflare, however, is in
+a completely different situation. Its network spans hundreds of cities, and billions of requests
+pass through Cloudflare every second, giving the company something very few have—a real- time view
+of how the internet works. So she has the data to answer the question: How long does it actually
+take to get from this city to that server right now? Which roads are congested? Which of them
+suddenly became faster? Cloudflare can continuously measure these metrics. Argo is a system that
+Cloudflare created to take advantage of this information. Instead of blindly following the path that
+BGP would take, Argo looks at Cloudflare's current measurements and asks a different question. Which
+way is the fastest now? Sometimes the answer is obvious. And sometimes—no. And instead of sending
+the request directly from the inbound data center to the client’s server, Argo can first route it
+through Cloudflare’s own private network to another location before sending it to the target. Thus,
+Cloudflare's own data centers become transit points. And this leads to one of the most striking
+ideas of this architecture. Sometimes the fastest way from A to B is through C. It sounds a bit
+illogical, but think about your navigator. Sometimes he intentionally drives off the highway because
+traffic jams make the shortest route the slowest. And in Internet routing, the same problem. The
+direct path is not always the fastest. The difference is that Argo doesn't guess. She actually
+measures. And Cloudflare describes Argo as a virtual backbone for the internet. The network now
+constantly monitors real-world traffic, learning which paths work best and routing future requests
+accordingly . When Argo was launched , Cloudflare reported that for approximately 50,000 beta
+customers, average latency dropped by 35% and the number of connection timeouts decreased by 27%.
+One customer, OKCID, saw a 36% reduction in query latency without changing a single line of
+application code. Now it is worth paying attention to another pattern. Argo exists because
+Cloudflare already had something that almost no one else had —a global view of internet performance.
+And they turned that visibility into a product. We've seen this same idea several times in this
+video. Anycast turns internet routing into a load balancer. The free tier turns millions of small
+sites into an attack detection network. And Argo here converts billions of requests into a live
+traffic map. So, time and again, Cloudflare takes the information that is a byproduct of working at
+scale and builds new capabilities on it. So, Argo solves one problem here: finding a faster path to
+the source server. Back in 2014, Cloudflare wanted to serve banks and other highly regulated
+organizations. There was only one problem. To complete a TLS connection, Cloudflare typically
+requires the website's private key. And this is obviously how TLS works. The private key verifies
+the identity of the server, and whoever holds it can impersonate the website. For most customers,
+transferring this key to Cloudflare was not a problem. But for the bank, it was an absolute problem.
+So, the TLS private key is one of the most protected secrets in the bank. And in many regulated
+industries , especially financial ones like banks, policy simply doesn't allow the key to leave the
+customer's infrastructure. And for many years, this meant that such customers, who were heavily
+regulated, could not use Cloudflare. But the breakthrough came when they looked at the TLS handshake
+itself. It turns out that the private key is only needed once—right at the beginning of the
+handshake. So, there is only one cryptographic operation that requires it. After that, the rest of
+the handshake and all encrypted traffic that follows no longer require the private key. So
+Cloudflare asked a simple question. What if this single operation had taken place elsewhere? And
+that's exactly what Keyless SSL does. Now the private key never leaves the client's infrastructure.
+It often remains inside a specialized hardware security module, or HSM. And Cloudflare performs
+almost all TLS handshakes at the network edge. Then, only at the moment a private key operation is
+required, it sends just that cryptographic request to the client's key server, which performs the
+operation, returns a signed result, and Cloudflare completes the handshake. So, the private key
+never leaves the client's control, but Cloudflare still terminates the TLS connection. In my
+opinion, this is an extremely good idea, since the TLS handshake is shared between two different
+machines. Everything happens on the periphery, and cryptographic operations are performed in the
+HSM. Cloudflare does almost everything, and the client performs only the one operation that requires
+the secret key. Of course, such a division has its compromises. Each new TLS connection now includes
+an additional network request to the client key service. This typically adds a few tens to a few
+hundred milliseconds, depending on the location of the key server. But fortunately, we pay this
+price mostly only once, at the beginning. Once a TLS session is established, the private key is no
+longer needed to re-establish it. So regular visitors usually don't encounter this additional
+request at all. But there is another problem. The key server now becomes part of the critical path.
+If it is unavailable, new TLS handshakes cannot be completed . So Cloudflare made it stateless,
+allowing customers to run multiple key servers behind a load balancer. Because these servers perform
+cryptographic operations on behalf of the client, the communication between Cloudflare and the key
+server is protected by mutual TLS. Cloudflare even made both sides of the protocol open . But
+there's another reason why this is interesting. This completely destroys the architectural pattern
+we observed throughout the video. Time and again, Cloudflare pushed data out. There were client
+settings, certificates, firewall rules—everything was copied across the entire server park so that
+the periphery never asked other machines for anything. But Keyless SSL does the exact opposite. It
+pays the cost of the network request for each new handshake so that the private key never leaves the
+client's control. And that means that sometimes copying data everywhere is the right decision. But
+sometimes the right solution is to have only one copy. Cloudflare liked this pattern so much that
+they later implemented it internally . So even when clients trust Cloudflare with their private key,
+the edge process handling the TLS connection no longer has direct access to it . This idea— a single
+authorized owner for the most sensitive state— has proven to be extremely effective in other areas
+as well. But later, Cloudflare encountered a different type of problem. This time the task was not
+to protect classified data. It was about managing data that was constantly changing, and that data
+needed only one authoritative place to be stored. So let's talk about that in the next section. Up
+until this point, almost everything we've looked at has followed the same pattern. Copy data
+everywhere, support stateless services, or cache responses. And this works quite well for
+configurations, certificates, and content that is mostly read-only. But some tasks simply don't fit
+into this model. For example, a chat room, a game lobby, or a collaborative document. All of these
+things have something in common. Multiple people are trying to update the same state at the same
+time. Cloudflare already had a global storage system called Workers KV. But Workers KV is designed
+for a different job. It replicates data globally and provides eventual consistency, which is great
+for read-intensive tasks. But it's a poor tool when two people in different parts of the world try
+to increment the same counter at the same time. So Cloudflare's response was to deliberately violate
+one of the main rules we talked about: instead of putting data everywhere, they put it in one
+specific place, and this is called durable storage. This is what a durable object is. A durable
+object is a piece of code with its own private storage. And at any given moment in time, there is
+exactly one instance of this object in the world. So regardless of where the requests come from,
+every request for that object's ID is directed to the same instance. And these requests are executed
+one after another. This solution simplifies almost everything. There is no need for consensus
+protocols, quorums, or conflict resolution because there is only one copy of the state . So, there
+is nothing that needs to be agreed upon. If two users send messages to the same chat at exactly the
+same time, both requests go to the same durable object. One of them is processed first, and then the
+other. Order arises naturally because there is only one place for a change of state . If this sounds
+familiar, it should be, as it is essentially the actor model popularized by the Erlang language,
+ported to JavaScript. And I think that's the most important architectural lesson in this chapter, at
+least. Cloudflare has been distributing data like configurations, certificates, firewall rules for
+years, all of which is replicated across their entire network. Instead, durable objects deliberately
+override this decision, and they found that replication is ideal for stateless services and data
+that is mostly read . But some problems cannot be solved by creating more copies. So when thousands
+of users are updating the same amount of data, there must be one authoritative source of truth. OK.
+So, as you've seen in my previous videos, I like to trace the entire path of a request through the
+architecture so that we can understand the system design at a glance. And that's exactly what we're
+going to do with Cloudflare as well. So let's put it all together and trace one request through the
+entire system so that everything in it becomes clear to us. And we'll be able to understand
+everything about architecture that we've studied in this video up to this point. OK. Let's say
+someone in Jakarta starts a small website running on Cloudflare's free plan. As you recall, the
+site's DNS record points to one of Cloudflare's Anycast IP addresses, and internet routing
+automatically directs the request to the nearest Cloudflare data center, which is located in Jakarta
+itself. And as you may remember from the second part of this video, no one sets up this route
+manually. BGP and Anycast automatically decided that this request from Jakarta should go to the data
+center in Jakarta. And once the packet arrives, it doesn't even immediately make it to the TCP/IP
+stack. XDP checks it at the network card level, and if the packet is legitimate, it is passed
+through, and then Unimog assigns the connection to one of the healthy servers in the data center.
+Then the TLS handshake begins, and its first message already contains the name of the host that the
+browser is trying to reach. So even before the handshake is complete, the server starts loading the
+site worker into the V8 isolate. By the time the first HTTP request arrives, the worker is ready to
+work. Modern cryptography has one fundamental requirement— randomness. Every HTTPS connection begins
+with the creation of cryptographic secrets that an attacker can never predict. The problem is that
+computers are terrible at dealing with randomness. They always execute deterministic instructions.
+Therefore, Cloudflare collects random data from the physical world. One of the most unusual sources
+is a wall covered in dozens of lava lamps in an office in San Francisco. The camera constantly
+monitors the movement of mass inside each lamp and converts these unpredictable patterns into
+entropy, which helps initialize Cloudflare's cryptographic systems. And even that is not enough.
+Therefore, the system is further reinforced by a pair of chaotic double pendulums in London. At the
+beginning of this video, in the introduction, I promised to explain why Cloudflare uses lava lamps,
+and now you know. OK. So now an HTTP request comes in , and the server accesses its local database
+dozens of times. It asks what certificate to use, what firewall rules to apply, what caching policy
+to choose, what origin server to direct the request to—and each lookup is simply a read from local
+memory. The web application firewall evaluates the request, and the worker executes inside its
+isolate, where the date.now function has not yet progressed. Assuming the request content is not yet
+cached , then Angora reuses an existing connection to the source server from its shared connection
+pool. And if Argo finds a faster route than the one BGP would normally choose, the request goes
+through Cloudflare's own network before reaching the origin server. While this whole process is
+going on, the server is also doing other work at the same time. DOSD identifies a DDoS attack on a
+completely different client and sets a new XDP filtering rule. And a configuration change saved by
+another client a few seconds ago just arrived via Quicksilver . And the same machine is actually
+servicing an amateur blog, protecting a bank, and studying the state of the rest of the network at
+the same time. Now the response goes back to the browser, and almost every decision we just saw was
+made locally on a server that is functionally identical to thousands of other Cloudflare servers
+around the world. And, as you already know, every Cloudflare server in the world knows the
+configuration of every client even before a request comes in. Here are some lessons learned from
+what Cloudflare did that you can use in your own system design. First: consciously choose the limits
+of fault tolerance. Cloudflare has chosen a single server fleet, giving them interchangeable
+capacity, instant global launches, and extremely low marginal costs. This also means that a failed
+update can spread to every server very quickly. The second lesson we learned: they let the
+infrastructure under Cloudflare do as much work as possible. Yes, Anycast has transformed internet
+routing into a global load balancer. Argo has transformed operational telemetry into better routing.
+So before creating a new system, ask yourself if the layer below you isn't already partially solving
+this problem. Third: if your system is read- over-write, you should deliver all data directly to the
+reader. If you recall, Quicksilver pays a price upfront during the write so that each request can be
+read locally. Fourth: We also saw Cloudflare dropping packets at the network card level. So if you
+are working with malicious packets and data, it is better not to process them at all , but to
+discard them as early as possible . Fifth: you must boldly go against assumptions and conventional
+wisdom. Cloudflare showed us that it can go against the grain with keyless SSL, isolates, and
+everything else we saw in the video. And in all of these situations, they did something very unique.
+They used V8 isolates instead of virtual machines or containers and chose keyless SSL to serve more
+customers. So they innovated in this new technology. These are exactly the systems we analyze in the
+Algorok course, and these are real industrial-grade architectures. We study the trade-offs behind
+them and the engineering solutions that make them work. And if that sounds useful, you can find the
+details on algorith.io. The link is in the description of this video. And this, roughly speaking, is
+the architecture on which the entire Internet rests. Creating such in-depth analyses takes a lot of
+work, especially research and then highlighting only the most important information for these
+charts. So, if you enjoyed this video, please subscribe, like, and be sure to share it with your
+friends. See you in the next video.

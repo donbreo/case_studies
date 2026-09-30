@@ -1,0 +1,303 @@
+On March 8, 2023, at 6:00 AM UTC, Datadog began shutting down. Not just in one region, but in every
+region of all three clouds they run on, simultaneously. In just 2 hours, all the product was gone.
+The control panel didn't work, the APIs didn't work, and the notifications trusted by thousands of
+companies stopped working. This means that 40,000 servers are down. It took 13 hours to restore most
+of them, and almost a full day to restore the remaining servers. And Pragmatic Engineer , a very
+well-known blog and newsletter, estimated the lost revenue at almost $5 million . Datadog now had
+five regions across AWS, Azure, and Google Cloud with multiple availability zones in each. And this
+is exactly the diagram you would draw if someone told you to create a system that no single error
+could bring down . So what actually kills five regions in three clouds in one minute? Well, it's not
+a cloud failure, and it's a good deployment . In fact, it was just one line of code added to Linux 2
+years ago that was sitting on all 40,000 machines waiting to be pulled . And probably almost no one
+who watched this video checked whether the same thing is present on their own server park now. This
+video is intended for SREs, platform and infrastructure professionals, or anyone currently
+maintaining a fleet of Linux servers. Everything we discuss today is actually taken from DataDog's
+own root cause description , analysis by pragmatic engineers, and public bug reports from systemd
+and Cilium. I have compiled all the information available on the internet into these charts. So wait
+until the end as this will be a very visual video and you will learn a lot just by watching it. So
+why should such a multi-regional configuration protect you? The idea is that regions fail
+independently. So, a single region failure is statistically quite unlikely, and a simultaneous
+failure of two regions has an extremely rare probability. A failure of five regions across three
+different cloud providers in 1 minute is so unlikely that no one plans for it , and almost all of
+us, regardless of our experience, assume that failures occur in one region at a time . And at Data
+Dog, regions were never truly independent: each of those 40,000 machines ran Ubuntu, downloaded
+updates from the same place, and performed the same automatic update task at the same time, UTC. So
+all five regions across three clouds had one operating system under them, and all those servers were
+updated at the same time. Data Dog's architecture has three layers of protection stacked on top of
+each other. If an availability zone is disabled, the workload continues to run in other zones in
+that region. If an entire region goes down, the other regions carry the traffic, and if an entire
+cloud provider goes down , there are two more cloud providers left. So, as you can see in the chart,
+they had AWS, Azure, and GCP. Now, against the failures that this architecture is designed for, it
+works quite well, and it has saved Data Dog many times before. But I want you to carefully consider
+each failure I just listed because they all have one assumption. They are all geographical in
+nature. A fire in a data center, a regional power outage, a cloud provider outage – each of these is
+a problem that affects one physical location on the map. This whole architecture is a bet that your
+failures are geographic, and that bet has helped many companies for years. But the problem is that
+the outage that occurred on March 8th was nowhere on the map. It was not geographical. It rolled
+through the software supply chain, and the supply chain has no concept of region at all. So let's
+trace this supply chain. Ubuntu now comes with an automatic update service called unattended
+upgrades, and its whole job is to fetch security patches and install them on a fixed schedule
+without any human approval. It is enabled by default, and leaving it enabled is a responsible choice
+because when a serious vulnerability becomes public in mainstream software, attackers start scanning
+machines for unpatched computers within hours. So, you want these fixes to appear quickly. And from
+now on, I'll just call it auto-update. On March 8, the patch that pulled the automatic updater was a
+regular security fix for systemd. As you know, systemd is the first thing the kernel starts when you
+boot a Linux machine, starts all your services, and keeps them running. One of its components,
+systemd-networkd, is responsible for the machine's network configuration. I'll call it a network
+service. And here's one detail that holds this whole glitch together: when systemd is patched, the
+installation doesn't just swap files on disk, but forces the network service to reapply the
+machine's network configurations. This reapplication is actually the trigger that starts everything
+else. And the reason for its danger is a change added to it 27 months ago. This whole failure is
+actually a chain with five links, and each of them requires the previous one . Link one is that
+sleeping change, but it activates systemd. Link two—this is what this change does to Linux routing.
+Link three—this is why the Datadog Cuban Bee Network works directly with it. And the fourth link
+explains why every test they passed. And the fifth link explains why a simple return to work has
+become a separate engineering problem. Now, those three links in the middle are the real technical
+core of the story. So, I'm going to elaborate on the Linux part carefully, because once you see it ,
+everything else will fall into place. If you've ever run the IP route command in Linux, you've seen
+the Linux routing table, which is a list that the kernel checks every time a packet needs to leave
+the machine to decide where to send it. Destination is entered, table returns next hop. But Linux
+doesn't stop at one table. It can contain many at once, which raises the question: if there is more
+than one , who decides which table a particular package will use? So Linux responds to this with a
+separate list, which is a list of rules. You see this by running the IP rule. So, each rule checks
+one property of the package and points it to the table. One rule says that if a packet comes from
+this source address , table five is used. Another rule says that if it has this particular mark,
+table seven is used. Another rule says that if the packet came through this network interface, use
+table 12. So the kernel reads the list from top to bottom, stops at the first rule that matches, and
+that is the table that the packet uses. And all of this is just policy-based routing, and typically
+you route a packet to its destination. This allows you to route it by its origin, label, or the
+interface it arrived on. And this is the mechanism behind most serious Linux networking, such as
+VPNs, machines with multiple network connections, or anything that needs to send certain traffic a
+certain way. So, there is one detail on which this whole failure depends. This list of rules is
+shared and has no owner. And any program with sufficient privileges can remove a rule from it,
+including a rule that was added by some completely different program. The kernel doesn't track who
+created what, and there is no name in the rule, no owner, no lock. So, imagine two programs on the
+same machine, both running these rules, each of which thinks it's the only thing that applies to the
+list. Nothing in Linux prevents one of them from silently deleting other rules. So there will be no
+error, no warning , and the rule will simply disappear. And I want you to keep that, because that's
+where the mistake lies. Now let's look at Kubernetes. In Kubernetes, each pod, that is, each
+individual running element of your application, gets its own IP address in a large virtual network.
+And something has to do the actual work of transferring the packet from the pod on one machine to
+the pod on another machine. And this task belongs to a networking plugin that Kubernetes calls CNI,
+and Datadog runs one of the most popular in the world, and it's called Cilium. So how does Cilium
+actually move this traffic between machines? Well, it does this by recording the exact routing rules
+we just talked about . It adds a marker, called a firewall label or FW label, to certain pod
+traffic, and then sets rules that say that any packet with that label should not use the main
+routing table, but should use my table, because that table knows how to get to every pod on every
+other machine in the cluster. These rules carry the entire load, and if these rules go away, the
+tagged traffic is effectively returned to the main routing table, which has no idea how to get to
+the pod on the other machine, so the packet just dies. Now, from a cluster perspective, this machine
+has failed, and it normally uses its control plane connection in the process. Now let's consider
+these two facts together. Cilium only works as long as its policies remain loaded in the kernel, and
+the kernel does not impose special protection against their removal by a privileged process. The
+trigger for all of this was a change that happened a few months ago, and back in December 2020, a
+new version of systemd changed how its network service handles these routing rules. Starting with
+this release, whenever a network service reapplies configuration for an interface it manages, it
+removes every routing rule that it did not create itself . So, anything it doesn't recognize, it
+simply treats as leftover garbage and deletes it. From the perspective of systemd itself, this is
+actually smart. He thinks he owns the network, so any rule he doesn't remember creating must be
+outdated garbage that someone else forgot to clean up. But the problem is that Cilium's rules, as
+you can see, are exactly that. These are rules that the network service never created. So, as soon
+as it reapplies its configurations, it erases the exact rules that the entire pod network depends on
+. The systemd developers added a switch to disable this, but only after about 5 months. It is called
+" manage external routing policy rules". I put it on the screen so you don't have to memorize it.
+But two things made him unnecessary here. First, it was enabled by default, meaning the deletion
+behavior was active unless you looked for it. And second, the changes were ported back to older
+versions of System D, which already worked everywhere. So, unless some operator found this obscure
+parameter and intentionally changed it, virtually every machine on a modern D system had this
+behavior, being activated and waiting for the network service to restart. And what finally caused it
+was the most boring event in the history of computing. It was just an automatic security update, and
+it did exactly the job it was designed to do. At this point, the obvious question is: how was this
+hidden for over two years? And Data Dog runs staging environments, canary deployments, the entire
+suite of testing tools. So why didn't any of them discover this? The answer comes down entirely to
+the launch order. So, let's look at a normal download. So, the machine turns on and the network
+service starts very early. It configures the interface and starts cleaning the rules. But at this
+point, systemd hasn't even started yet, so systemd rules don't exist yet. So, purification searches,
+finds nothing foreign, and removes nothing. In just a moment, Cilium starts up, sets its rules, and
+the machine is fully operational. So, if you take a new machine, install a new D system, reboot it,
+and run your test suite, everything will go smoothly. And almost every test that anyone ever writes
+is some version of exactly this, just a clean download. The sequence that actually kills you is the
+reverse of that, and it's much more specific. The network service should actually re- apply its
+configuration to a machine that has already been running for a while, long enough for the Cilium
+rules to be in the kernel. And that's the only thing that an in-place system D update does , because
+a package update doesn't reboot the machine, it restarts the network service while it's running,
+directly on top of the Cilium rules. And virtually no one writes a test for this particular scenario
+you see on the screen, because testing it would require simulating conditions that rarely exist in a
+typical test environment. Because you would have to keep the machine running for weeks and let its
+network fully establish, restart one specific service in place, and then check if the pods can still
+talk to each other. So, this is n't really a test. This is a production incident with additional
+steps, which is why this bug could have occurred in a production environment. So before we get into
+the details, I want to take a few seconds to tell you about the cohort I host every few weeks. It is
+called the AlgoRock cohort. We look at advanced system design and architecture for a post- AI world.
+Typically, these are senior engineers such as SREs, platform engineers, principal engineers,
+enterprise and solution architects, and vice presidents of engineering. These are people with work
+experience ranging from 5 to 26 years. This is a great way to learn from real-world case studies in
+a production environment. So check out the algorock.io website, and check out all the topics we are
+going to cover. So, we'll look at modern systems like Anthropic handles LLM, Hugging Face handles so
+many sandboxes for AI models , and how Together AI hosts so many open source models at scale. This
+is a 12- week program, and if you like the topics you see on the website, I want you to fill out the
+form that opens when you click the " Reserve" or " Register" button at the top. After filling out
+the form, we will check if you are suitable and then arrange a call with you . If you want to access
+the pre- recorded sessions at your own pace, they will cost around $800, and if you want to sign up
+for a live cohort , they will cost around $2,400, but you will have to join a very long waiting list
+as we can only accept around 15-20 engineers in each cohort. So, if you are new to engineering and
+just starting your career, this cohort may not be of interest to you, so you do not need to fill out
+the form. Okay, now let's get back to the video. Okay, now imagine yourself on the morning of March
+8th. Automatic updates run on a fixed schedule , and this schedule is set in UTC and is identical on
+every machine because each machine was built from the same base image. So, at 6:00 AM UTC, the patch
+starts installing everywhere at the same time, and the network service reapplies its configuration
+everywhere at the same time. The Cilium rules are being erased everywhere at once, and there has
+been no gradual rollout, no individual region that hasn't switched to failover to give someone a few
+minutes' warning. At 3:06, any monitoring that was still active showed that servers were
+simultaneously failing in all five regions across all three clouds. And this was the moment when
+this entire expensive, multi-regional, complex installation was supposed to prove its worth, but it
+did nothing. The failure did not begin in any single region. It started a level above all of them in
+a single component that is delivered to every region simultaneously at the same time. And while all
+this was happening, the engineers trying to fix it ran into a second problem, overlapping the first.
+So, the main tool they use to understand their own infrastructure is Datadog itself, and Datadog is
+what broke. So now they have to diagnose a failure in five regions of their platform, perhaps their
+platform that is currently down. So they had to go back to their own cloud providers' consoles to
+SSH into any machines that were still responding and create a chat room that itself was getting
+worse due to the same failure. Visibility, which you depend on most during a crisis, is the first
+thing a crisis takes away. And besides the failure being blind, it blocked itself in an unpleasant
+way. After removing the Cillium rules, the compromised machines couldn't reach the Kubernetes
+control plane, which was the brain that was supposed to know it was a sick machine and automatically
+recover it. But the brain also couldn't reach the sick machines because the network path between
+them was exactly what had broken. So, every element of self-healing automation, that is, a mechanism
+that exists specifically for massive failures like this, sat helplessly on the wrong side of the
+damage it was supposed to repair. So the restoration turned into a slow manual job, performed by
+machine after machine on tens of thousands of machines. And it got even slower because the cause
+itself wasn't confirmed until 11:36, which is almost 6 hours after the incident started, and
+everything before that was spent looking for symptoms. Once they figured it out, the repair had a
+strict order that he was forced to follow. First you need to bring back the parent control planes,
+because until that Kubernetes mechanism exists, you can't control anything else. Then you restore
+the worker machines, and only then the services running on top of them. So, each level can only come
+back after the level below it comes back to life, and the level that broke was the very bottom. To
+further complicate matters, as soon as the machines started returning, tens of thousands of them
+tried to re-register with these control planes at the same time. So, this was a huge crowd of load
+that the recovery system had to handle on its own. We must give credit to all three cloud providers
+who responded quickly and increased capacity limits so that Datadog could launch machine
+replacements more quickly. Now most servers were back up and running in about 13 hours, while the
+remaining servers took a full day. And for a company like Datadog, the $5 million loss in revenue
+was the lesser of the two costs. Now the entire Datadog product is one promise. We keep an eye on
+your systems when everything else falls apart. And for 13 hours, the only thing whose job it was to
+keep an eye on what went wrong. Now, many engineers and experts on Reddit have concluded that
+Datadog was wrong, but in fact, that is not the case. They were not wrong. Multi-region, multi-cloud
+failover zones are an automatic security fix. Each of these is a published recommended best
+practice, and Datadog has carefully implemented them all at the same time. This failure looks like
+what it looks like when every single practice you have implemented is correct, and yet they all have
+the same blind spot. When we design with redundancy in mind, we instinctively think about geography,
+zones, regions, and vendors because the failures we envision are geographic. But there is a whole
+second class of failures that propagate through your shared dependencies and completely ignore
+geography. So stop and think for a minute about everything that is identical byte-for- byte on every
+machine you run in your infrastructure, such as the operating system, the package mirror they all
+pull from , the base image your containers are built on, and the continuous integration pipeline
+that builds your code, the registry that stores your images, the certificate authority that each
+service trusts, and the DNS provider through which everything is resolved. So, each of them is a
+single shared object that sits over all of your regions at the same time. And when any of them sends
+bad changes, every region receives those bad changes at virtually the same time, no matter how many
+thousands of miles apart they are . So, it's important to remember that multi-region is not the same
+as multi-fault domain. So, your number of regions doesn't give you anything against bad changes
+coming down the supply chain. A true blast radius survey should be done in two passes, not one. The
+first pass is the geographic one, which everyone is already doing, that is, mapping zones and
+regions and switching to a backup emergency mode. The second pass is one that almost no one does,
+and it goes up the stack, not down the map. So, on this pass, for each piece of software that is
+identical across your entire server fleet, you ask three questions about it . Where does it come
+from? What event caused his change? And does it change everywhere at the same time? Anything that
+comes from a single source to every machine you own is a single point of failure. If Datadog had
+done this second pass, the auto- updater would have fired up immediately because it has the same
+source, the same schedule, and the same block on all 40,000 machines. It was a single synchronized
+update channel hidden beneath an architecture that was built entirely on redundancy, and no one had
+ever drawn it on a diagram. Now let's talk about fixes, because these are expensive fixes, and as
+senior engineers, we can't afford to miss out on compromises. Here are the three most important
+ones. The first is the auto- update dilemma. The reflex here is to simply turn off automatic
+updates, and Datadog has partially done that. But you have to remember why automatic updates exist.
+When a serious hole is exposed in something like OpenSSL , attackers exploit it within hours of its
+publication. If you add a human review stage before every patch, you add hours, sometimes days, to
+each of those updates. And these hours and days are a window when your entire server fleet is
+deliberately vulnerable to attacks. So by adding a human verification step, you haven't actually
+eliminated the risk, you've just traded it, which is the risk of outrage , for the risk of
+violation. And for many companies, the risk of a breach is scarier. So, the real answer is not to
+turn off automatic updates, but actually to do incremental updates. So you have small waves, not
+everywhere at once. So, you first test the updates on machines that look like what production
+actually looks like, which can be weeks old and run with a real stack, and then you propagate the
+changes to the rest of the server fleet. And the second is a little deeper, namely: the state of the
+network considered itself the owner of the network. Now both follow the same intelligent instinct,
+which is to clear out anything in my area that I don't recognize. And what they both strive for is a
+shared core state without any notion of ownership. So, two programs, each correct in their own right
+, combine into a disaster. And the third compromise is something that no one talks about and no one
+records, right ? That is, prevention has a constant cost. This means that you see this number, the
+number $5, which is the amount of money that Datadog lost due to this incident. So, that's a visible
+number, but there's also a lot of invisible money that's added because you're now adding dependency
+reviews, the phased deployment pipeline that we just discussed for these two fixes, right? And some
+tests, like new tests, the reason for which no one will remember for a few months. Now these are the
+costs you don't see, and they are the ones that decide whether the new discipline your team now has
+survives or quietly fades away for 2 years until the next incident proves again that you needed
+these fixes in the first place . So what actually fixes this? There are three levels of responses,
+and they become increasingly uncomfortable. The surface fix is ​​a setting, and systemd has added a
+switch that we saw earlier, namely managing external routing policy rules, which tells network
+services not to lose external rules. But the problem was that it was released 5 months late, it was
+enabled by default, and it was ported back to versions that already work everywhere. The actual fix
+that Cilium released is better. It now labels its own routing rules with a protocol identifier,
+essentially a little signature that Cilium created it. Essentially, a small signature that says
+Cilium created this so that the network service can recognize them as their own and then skip over
+them. This does close this particular collision, but look closely at what it does. This is an
+invention of a property that the kernel does not provide. This is a convention screwed on top, and
+it only works as long as every program that touches these rules agrees to abide by it. What is a
+deep fix, and one that no one supplies , is that the shared resource itself has no owner. Now the
+two layers manage a single pool of kernel routing rules with no arbiter, no blocking, no record of
+who wrote what. And adding tags to articles about today's conflicts between these two specific
+programs does nothing about the next program that comes along and starts removing rules it doesn't
+recognize. Whenever two independent systems manage the same shared resource without an agreed-upon
+owner , you don't have a bug, you have a bug category, and you'll be fixing instances of it one at a
+time forever. The actual fix is ​​to make the boundary explicit, either by a single owner or a true
+arbitration level between them. It's expensive, which is why it's rarely implemented, and why this
+class of failures continues to occur across the industry, not just here. Now, there's another new
+engineering element lurking in how poorly the recovery went, and it generalizes the situation far
+beyond this incident. Datadog spent the first hours of the worst outage in its history without the
+monitoring its entire organization runs on because the monitoring was locked inside the outage. And,
+in fact, the eyes were on the same network failure that everyone was trying to fix. So the principle
+is pretty simple and you can learn it, which is: never build your recovery on top of something that
+can actually fail . So, a more specific fix is ​​an independent observation path. At least one way
+of observing that has nothing to do with the system it observes. In practice, this looks like out-
+of-band access that doesn't go through your cluster network, and it could be a cloud provider's own
+console or a large-scale SSH on a separate path, a small health dashboard that's on a completely
+different stack, and a different provider, which are the things that DataDog teams have used to
+solve problems. And all these things seem superfluous and wasteful until the day when it's the only
+thing that still works and that saves you. So here's a test I've asked people to run on their
+infrastructure, which is: go through your incident set line by line and ask for each step, does it
+imply something that doesn't work right now? So, if step one is to open the toolbar, and the toolbar
+is running on the cluster that is currently burning, you don't have a toolbox, you have a desire.
+So, there are five takeaways from this video that you can apply directly to your own systems. The
+first is an audit of your dependencies, not just your geographic location. Because a multi-regional
+approach protects you from geographic disruptions and nothing more . Second, hidden bugs have long
+fuses, because this change originated in December 2020 and didn't explode until March 2023, which is
+27 months of sleep inside a dependency that DataDog didn't write and never read. The third thing,
+which I think is very important, is that you test the state that the production servers are actually
+in. So, new downloads and clean reboots are the easiest tests to write, and they are what hide this
+bug. And this bug actually needed a week's notice and a reboot on site to even appear. So, if your
+test server fleet doesn't have machines that run for a long time and restart at least one service,
+you now have this blind spot yourself. And I also want you to pay attention to two or more systems
+sharing the same resource without an owner, because that's what this whole glitch we've been looking
+at looks like. If you find something like this, treat the boundary as a fault line. And the fifth
+thing, which I've repeated many times in this video, is never build a recovery on something that can
+fail. So, if your incident response plan assumes your monitoring is working, you don't have a plan,
+as I said before. And this is exactly the type of thinking I encourage people to do when diving deep
+into the AlgoRock cohort. So, it's a 12-week, fairly intensive course, for senior engineers only. We
+look at real production systems and the real trade-offs behind them. So , if you like it, check out
+algorock.io. The link is in the description of this video. So, the main thing you should understand
+from this video is that almost all modern cloud infrastructure stands on the same common foundation
+as Data Dog. The same handful of base images, the same package mirrors, the same update mechanisms,
+the same CNIs, the same orchestration layers. All of this is under everyone's regions. So, in any
+system design or infrastructure architecture diagrams that you see, architects always draw diagrams
+for different regions, and they will be very proud of that. But the supply level below it never
+falls into the scheme, and this is where the failures of the entire fleet of systems come from. So,
+a great idea is that when designing for resilience, you also need to draw a second diagram, which is
+a dependency graph with a small number of individual elements on top that subtly affect each region
+you are working on. Because as you saw in today's video, your next big failure probably isn't hiding
+in any one region, it's hiding somewhere else. I'm sure you've already figured out that consuming
+all this information, turning it into these charts, and creating these long, deep- dive videos takes
+up a lot of my time and effort. So I would really appreciate it if you would just share this video
+with your friends if you like this video and comment on it. And I hope to see you in the next video.
+I'll have to set aside a lot of time after my office work, like with my full-time office job, and
+then I'll make these videos for you. So see you in the next video. Thank you.

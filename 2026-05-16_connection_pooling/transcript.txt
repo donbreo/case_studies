@@ -1,0 +1,140 @@
+Today we're talking about database connection pooling. It's one of those unglamorous infra topics
+that doesn't get talked about much, but it's actually the difference between a database that scales
+and a database that falls over at just 500 users. And here's the sad part, most engineers learn
+about connection pooling on the day that their application first fails over. So, what happens is
+you're running along fine, traffic grows, and then one day you start seeing some weird errors. You
+start seeing connection timeouts, and your database is sitting there with 8 gigs of RAM doing
+basically nothing, and you're seeing latency spiking even though the queries themselves are fast.
+So, that's the connection pool problem, and once you understand this, you'll see it in every system
+you work on. So, let me walk you through what it is, why you need it, and how to actually set it up
+without breaking things in production. Okay, so here's the problem, every time your application
+opens a connection to a database like Postgres, it's not a cheap thing. The database spawns a whole
+process just to handle that connection, and each process eats up about 5 to 10 megabytes of RAM, and
+it holds on to resources, file descriptors, and internal state just to keep that one connection
+alive. Now, imagine you have 1,000 application servers, and each one opens a connection to the
+database, that's 1,000 Postgres processes sitting right there. So, that's 5 to 10 gigabytes of RAM
+just on connections. And the painful part is that most of these connections are not even doing
+anything. Studies show that 80 to 95% of application connections are idle at any given point of
+time. So, you're paying for 1,000 connections and maybe using just 50. And this is where connection
+pooling comes in. So, instead of every app server connecting directly to Postgres, they all connect
+to a little middleman called a connection pooler, and the most popular one for Postgres is called PG
+bouncer, and hands them out to your app servers as needed. So, when an app server needs to run a
+query, it borrows a connection from the pool, runs the query, and gives it back. And because
+connections are mostly idle anyway, 50 real connections can easily serve 1,000 application servers.
+So, look at the diagram on the screen. On the left, without pooling, you've got 1,000 connections
+and 5 to 10 gigs of RAM burned. On the right, with PgBouncer, you've got the same 1,000 app servers,
+but only 50 database connections and 250 megabytes of RAM. So, that's 20 times fewer connections,
+95% memory reduction. And that's the whole idea. Now, let's get into the nuance because this is
+where people mess it up. And by the way, this video is part of the intermediate system design series
+on this channel. And there's another playlist series called system design for beginners that has
+more than 50 videos. If you binge-watch both of these playlists, you'll know system design better
+than like 9% of the people on the planet. Okay, so PgBouncer has three different modes it can run
+in. And the mode you pick determines how long a database connection gets held onto for each client.
+This is one of the most important decisions you make when setting up pooling. So, let's walk through
+all three of these. The first one is session mode. In this mode, when a client connects to
+PgBouncer, it gets assigned a database connection for the entire length of that session. The whole
+time the client is connected, that database connection is theirs. Nobody else can use it. And this
+is the most compatible mode. Everything just works. Prepared statements, session variables,
+temporary tables, all of it. But, it's also the worst for multiplexing. If your clients stay
+connected for a long time, you're barely better off than having no pooler at all. The second mode is
+transaction mode, and this is the one that most production systems use. In transaction mode,
+PgBouncer only holds onto a database connection for the duration of a single transaction. You can
+run begin, you do your work, you commit. The moment you commit, the connection goes back to the
+pool. Someone else can grab it immediately. This is the sweet spot, and you get really good
+multiplexing because connections are constantly being recycled. The only trade-off here is you can't
+use session-level features like prepared statements or session variables across transactions. And
+for most web applications, that's totally fine. The third mode is statement mode. In this mode, the
+connection is held only for a single query. The moment your query finishes, the connection goes back
+to the pool, even if you were about to run another query right after that. This gives you the best
+multiplexing possible, maximum throughput, but you can't use transactions at all. And that sadly
+rules it out for almost everything. So, what you need to know is in production, 95% of teams use
+transaction mode. It's the best balance of multiplexing and compatibility. So, you should use
+session mode only if your app relies heavily on prepared statements or session state. And you should
+avoid statement mode unless you really know what you're doing. Now, we talked about PG bouncer, but
+there's another tool called PG pool 2. They sound similar, but they're actually very different
+animals. PG bouncer is lightweight. It's a small single-threaded C program. It uses 2 MB of RAM. All
+it does is connection pooling, and that's it. It's designed to do just one job, and it does it
+really well. PG pool 2 is the exact opposite. It's multi-process, uses 50 plus MB of RAM, and it
+does a lot more than just pooling. It handles connection pooling, that's true, but it also does
+read-write splitting, query caching, and automatic failover between database nodes. So, PG pool 2
+might sound better on paper because it does so much more, but here's the thing. When you add more
+features, you add more failure modes. So, PG pool 2 has a reputation for being harder to tune,
+harder to debug, and slower under load than PG bouncer. So, the simple rule is use PG bouncer for
+connection pooling, but if you also need read-write splitting or automatic failover, then consider
+adding PG pool 2. But don't start with PG pool 2 just because it does more. Start simple. Now,
+before we continue, I want to take a few seconds and go a bit off topic and tell you about the
+AlgoRock cohort, which is a live cohort that I usually run 10 to 15 senior engineers. And I teach
+this cohort personally. And I'm doing this because there are no cohorts that exist for senior
+engineers. Basically, people who already know the basics of architecture and system design, and are
+wanting to build the next generation of production software in the post-AI world. So, this is a
+12-weeks program. We cover topics like advanced system design, AI-native system design, architecture
+for post-AI world, and tips and tricks to using AI coding tools, but from a senior engineer
+perspective. Now, I'm planning the next cohort, which is actually my third cohort around mid to end
+of May 2026, and I want you to go through these topics that we're going to cover in this cohort. If
+you like them, I want you to fill up the form that opens up when you hit the enroll button. Once you
+do that, I'll check to see if you're a great fit, and then we'll set up a call with you. It's about
+$2,500 for the entire cohort, which is live, and I teach the cohort personally. It's a great
+experience, and once you fill the form, you can also talk to any of the people who have attended the
+cohort previously, and decide if you want to go ahead or not. But if you just wanted access to the
+pre-recorded videos of the cohort, that's about $800. All right, now back to the video. Okay, so now
+the big question is, how many connections should your pool actually have? And this is the part where
+engineers get it completely wrong. The intuition is more connections mean more throughput, right?
+They set the pool size to 200 or 500, thinking they're being generous with the database, but
+actually making it slower. And here's the formula that actually works. Connections equals CPU cores
+* 2 + 1. So, on a 16-core server, that's 33 connections, not 200, not 500. It's just 33. And why
+does this work? Well, it's pretty intuitive once you see it. Each CPU core can really only do one
+thing at a time. But while one connection is waiting on IO, fetching data from disk, waiting for the
+network, the core can run another connection. So, each core realistically handles about two
+connections. The plus one accounts for a connection that handles coordination overhead. Any more
+than that, and you're just creating context switches. The CPU spends time swapping between
+connections instead of actually executing queries. So, you're not doing more work, you're actually
+doing less work with more overhead. And the Postgres team actually ran the benchmarks on this. On a
+16-core box, 32 connections outperformed 200 connections in real throughput tests. Fewer
+connections, more queries per second, and this is one of the results that seemed wrong until you
+understand why. And if you have multiple app instances, you divide this total across them. So, if
+you've got four app instances sharing a database, each PG bouncer pool should have about eight
+connections. Total stay at 32. So, the takeaway is size your pool based on your database's CPU
+cores, not your traffic. It's a CPU problem, not a traffic problem. All right, now let's talk about
+a nasty failure mode you need to know about. It's called the connection storm. So here's what
+happens. Your PG bouncer is running happily multiplexing 1,000 app connections down to just 50
+database connections. And for some reason, PG bouncer restarts. And the moment it restarts, all of
+the existing client connections are stopped, all 1,000 of them. And here's where it gets bad. All
+1,000 clients detect the disconnect at almost exactly the same time, and they all try to reconnect
+at once. And now PG bouncer is suddenly dealing with 1,000 simultaneous connection attempts. It
+tries to open 1,000 new connections to Postgres because none of its pool is warm yet. Postgres does
+what Postgres does. It forks a new process for every connection attempt, and that's 1,000 forks
+happening at once, which is a massive CPU spike. Now if you're lucky, Postgres survives. If you're
+not, it hits its connection limit, runs out of memory, and crashes. A pooler restart just took down
+your entire database. Now there are four things you can do to prevent this. First is pre-warm the
+pool, set min pool size so PG bouncer maintains a minimum number of connections at all times, even
+right after a restart, clients have somewhere to go immediately. Second is stagger the reconnects.
+So use server login retry on PG bouncer and add jittered retry in your application code. Instead of
+all clients retrying at the same millisecond, they're spread out over a few seconds. Third, reject
+gracefully if the pool is full. Use client login timeout so overwhelmed clients can get a quick try
+again later instead of hanging forever. And fourth, make sure your applications actually implement
+jittered retry. This is an app level thing. If your app code retries instantly on disconnect, no PG
+bouncer config will save you. The key insight here is that pooler restarts are high risk operations.
+Treat them like database operations, not like web server operations. Okay, so the last piece, how do
+you know that your pool is healthy? There There three metrics to watch, and these are the ones that
+matter in production. The first is CL waiting. This tells you how many clients are currently waiting
+for a connection from the pool. If this number is consistently zero, you're healthy. If it's one to
+five, it's something to investigate. Maybe your pool is sized too small, or your queries are getting
+too slow. If it's above 10, you're in critical territory. Clients are backing up, and your users are
+feeling it. The second is SV active divided by pool size. This is your server utilization ratio,
+which is what percent of your pool connections are actively in use right now. Under 50% is healthy.
+50 to 80% is worth investigating. And above 90% means you're saturated, and any small spike will
+cause problems. The third is average exact time. This is the average transaction duration. Under 10
+milliseconds is healthy. 10 to 100 is okay, but worth watching. And above 500 milliseconds, and
+you've got slow queries hogging connections, which is what causes CL waiting to spike in the first
+place. And this is that one alert you absolutely want to set up. Alert on CL waiting greater than
+zero for more than 30 seconds. That single alert catches basically every pool sizing problem, and
+every slow query problem before it turns into an outage. So, let me leave you with one idea to take
+away. Connection pooling isn't a performance optimization. It's a survival strategy. Without it,
+your database burns memory on idle connections, and it wastes CPU on context switches, and falls
+over the moment you get a traffic spike. But with it, a small pool of connections can serve
+thousands of clients efficiently. So, use PG Bouncer. Use transaction mode. Size your pool at CPU
+cores * 2 + 1. Watch CL waiting, and plan for the connection storm before it happens. So, this was
+database connection pooling. We looked at the pooler, the modes, the sizing formula, the connection
+storm, and the metrics that actually matter. I'm sure you appreciate how much work goes into
+building these videos and these diagrams. So, please subscribe to this channel, like and share this
+video, and drop a comment if you have any questions. And I'll see you in the next video.

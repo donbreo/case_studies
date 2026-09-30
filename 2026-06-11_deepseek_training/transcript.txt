@@ -1,0 +1,199 @@
+In late 2024, a Chinese AI lab released a model that matched the best in the world. And the training
+cost they reported was around five and a half million dollars. For context, the frontier labs were
+widely believed to be spending somewhere around a hundred million and over a billion dollars to
+train a similar model. And what made DeepSeek so efficient with money is not some magic trick or
+access to some special equipment, but it was hardcore engineering. And today's video is super
+important. If you're a platform engineer, site reliability or devops engineer, machine learning or
+ML ops person, or a solution and enterprise architect. Now, this video is going to be very visual
+and I have a lot of diagrams prepared for you guys. So, I want you to stick around till the end so
+that you completely understand how DeepSeek pulled off one of the most difficult engineering task
+ever. So, the important thing is that the low cost that DeepSeek was able to achieve was not a hack.
+It was a deliberate, deeply thought out consequence of one core decision that DeepSeek made. And
+almost every architectural choice in the model traces back to that single decision. So, the plan of
+this video that we're going to walk through how DeepSeek actually drove the cost down. And many
+people on Reddit just think that they just got access to cheaper GPUs, but that's not what happened.
+They actually took a critical engineering decision. And that one decision cascades into everything
+like the attention mechanism they had to use and the way they structured the model's parameters and
+the number format that they did the math in. So, all of it traces back to just one decision. The
+main lesson that we'll take away from this video will be that real hard constraints are not the
+enemy of good engineering. They're often the source of it and DeepSeek was working under a
+constraint that should have crippled them. Instead, that constraint is the reason they built
+something more efficient than the labs with unlimited budgets. So, by the end of the video, you'll
+understand both how they got the cost down and what it cost them to actually do it. To understand
+DeepSeek, you have to understand the constraint they were under. So, because of US export controls,
+Chinese labs could not legally buy Nvidia's top-end training chips, which were the H100s at that
+time. And every Western lab was using these particular chips to build on. Whereas DeepSeek was
+largely working with the H800, which was a deliberately cut down chip. It had the same compute, but
+with the chip-to-chip communication bandwidth strangled. And in this chip, the interconnect, or the
+speed at which GPUs talk to each other, was throttled on purpose. So, here's why that matters. The
+way most large labs train a giant model is that you spread the model across thousands of GPUs, and
+those GPUs spend an enormous amount of time talking to each other, like passing gradients, syncing
+weights, shuffling data between experts. And training at scale is as much a communication problem as
+a compute problem. And the standard answer to the communication problem is just buy the chips with
+the fastest interconnect and throw money at it. And DeepSeek couldn't do that because of US export
+bans, and the fast interconnect was exactly a thing that had been taken away from them. So, they
+made a different bet. Instead of treating the hardware as a fixed thing you buy around, they treated
+the hardware as a design constraint to engineer around. They co-designed the model and the hardware
+together, and every layer of the model was shaped by the question, "How do we do this while moving
+as little data as possible between chips?" So, that was the core important decision, which was
+hardware-aware co-design. While most labs design the model first and then figure out what hardware
+to run it on, DeepSeek designed the model and the hardware strategy as a single thing because they
+had no choice. And that single inversion is a source of nearly every efficiency in this system. So,
+what's important here is the shape of the model. Now, DeepSeek V3 is a mixture of experts model. It
+has about 671 billion total parameters, but for any given token, it only activates about 37 billion
+of them. It uses something called as multi-head latent attention. It trains these in an 8-bit number
+format called FP8 and it predicts multiple tokens at once instead of one at a time. So, every one of
+these choices is a cost decision in disguise. Let me show you how each one falls directly out of
+that single code design bit. All right, let's start with the biggest lever, which was mixture of
+experts because this is where the largest cost saving comes from. And people underestimate how
+aggressive DeepSeek was with it. Now, in a normal dense model, every single parameter is involved in
+processing every single token. So, if your model is 400 billion parameters, all 400 billion will
+fire for every word. And that's enormously expensive and it's expensive on every token forever, both
+in training and in serving. A mixture of experts model says, "That's wasteful. Instead of one giant
+network, split the model into many smaller expert networks and for each token, only activate the few
+experts that are actually relevant." So, the model can be huge in total knowledge but cheap per
+token because only a small slice rather than at a time. And DeepSeek pushed this hard. 671 billion
+total parameters but only 37 billion active per token. That's roughly a 5% activation. You get the
+knowledge capacity of a massive model while paying the compute bill of a model less than a 20th of
+its size on every token. That ratio is a huge chunk of the cost story right there. But mixture of
+experts has a famous nasty problem and that's load balancing. So, if you let the model freely choose
+which expert to use, it tends to overuse a handful of popular experts and ignores the rest. So,
+everyone's traffic piles onto a few experts and those become bottleneck and the rest of your
+expensive parameters sit idle. The traditional fix is to add an auxiliary loss, basically a penalty
+that forces the model to spread load evenly but that penalty fights against the model's actual
+learning. You're degrading quality to get balance. Now, DeepSeek's innovation here was an auxiliary
+loss-free load balancing strategy. So instead of penalizing the model that match the routing with
+the bias term that gets adjusted dynamically to keep experts balanced without adding a loss that
+corrupts the learning signal. They got the balance without paying the quality tax. And that's the
+kind of move that only comes from sweating the constraint. And these choices, which was huge total
+capacity, tiny active footprint, balance without the usual penalty, are a big part of why the
+compute bill was so low. But mixture of experts is also where the communication problem we talked
+about gets worse. And that's the next part of the story. So let's talk about what MoE costs you
+because this is where the hardware constraint comes roaring back. Now before we go any deeper, I
+want to take a few seconds to tell you about a cohort that I teach personally to about 15 to 20
+senior engineers every few months. And it's called the AlgoRush Cohort. We cover advanced system
+design and architecture for the post AI world. And usually the people who attend are senior folks
+like SREs, platform engineers, principal engineers, enterprise and solution architects and VP
+engineering people. And these are engineers all the way from 5 years to 26 years of experience. And
+this is a great way to learn from actual production case studies. The next cohort starts in July
+this year and I want you to go to the website algorush.io, which is algorush.io, and actually go
+through the list of topics that we're going to cover. We'll cover modern systems like how Anthropic
+handles LLMs and how Hugging Face handles so many sandboxes for open source AI models and how Cursor
+handles context chunking and token budgeting. It's a 12-weeks intensive program. If you like these
+topics, I want you to fill up the form that opens up when you hit the reserve or enroll button. Once
+you've done that, I'll check to see if you're a great fit and we'll set up a call with you. The live
+cohort personally taught by me is about $2,500 for a lifetime cost and if you just wanted access to
+pre-recorded videos, that's just $800. Now if you're early on in your career and beginning with
+engineering right now, this cohort might not be very relevant to you, so please don't fill up the
+form. All right, now back the video. So, the problem is that in a mixture of experts model spread
+across many GPUs, the experts actually live on different chips. So, when a token needs experts that
+happen to live on three different GPUs, the tokens data has to be physically shipped across the
+network to those chips, processed, and shipped back. This is called the expert parallelism, and it
+means mixture of expert models are extremely communication heavy, and every token is potentially a
+bunch of cross-chip round trips. Now, if you remember DeepSeek's constraint, their chips had
+deliberately throttled interconnect. The exact thing MoE, which is mixture of experts, leans on the
+hardest is fast chip-to-chip communication. And this was the thing that they had been denied. So,
+the very architecture that saved them the most compute also slammed straight into the single biggest
+hardware weakness. Now, on paper, MoE was the worst possible choice for their hardware. And this is
+the moment where most teams would back off, but DeepSeek overlapped communication and computation so
+tightly that while one batch of data was being shipped between chips, the GPUs were already busy
+computing on another batch. The chips were almost never sitting idle waiting for the network. They
+nearly achieved full computation-communication overlap, and they hit the bottleneck instead of
+paying for it. So, in their case, the constraint forced a more sophisticated design. They got MoE's
+compute savings and refused to pay MoE's communication penalty. Okay, so this is where DeepSeek did
+something really clever, and let's try to understand what this is. Now, there are two completely
+different costs in running a large language model, and they pull in different directions. There's
+the cost of training the model, which is the one-time build to create it, and there's the cost of
+inference, which is serving the model to the users forever on every single request. A lot of
+techniques that make training cheaper make inference more expensive, or the reverse. DeepSeek had to
+attack both, and they used different tools for each. The big inference cost in a modern model is
+something called the KV cache. When a model generates text, it has to remember everything it's
+already read and written in the conversation, and it stores that in memory as the key-value cache.
+The longer the context, the bigger the cache gets, and it eats memory fast. For long conversations,
+the KV cache becomes the dominant memory cost of serving the model. So, DeepSeek with something
+called multi-head latent attention or MLA. The normal approaches to shrinking the KV cache work by
+just throwing away some of the detail. Shared information across attention heads to save memory, and
+they lose a little quality doing it. But, MLA does something smarter. It compresses the keys and
+values down into a small representation, which is a low-rank compression, and stores only that
+compact version, and reconstructs what it needs on the fly. So, you get a dramatically smaller KV
+cache while keeping the quality of full attention. And for this, there is a huge operational payoff.
+A smaller KV cache means you can serve longer contexts, fit more users on the same GPU, and run
+inference far cheaper without the quality hit that the usual memory saving tricks cost you. So, MLA
+is attacking the forever cost, which is the serving cost, while MoE, which was Mixture of Experts,
+was attacking the training cost. So, two different problems, two different purpose-built tools. This
+is what good engineering looks like. They did not reach for just one blunt instrument. They
+identified that the training cost and serving cost are different problems with different
+bottlenecks. And then, they built a separate targeted solution for each. All right, so they've got
+Mixture of Experts for cheap compute, and they've got MLA for cheap serving, and a communication
+strategy that hides their hardware weaknesses. Now, let's talk about the most surprising lever next.
+They actually did the training math in 8-bit precision, FP8. What this means is, when you train a
+neural network, you're doing trillions upon trillions of multiply and add operations on numbers. The
+question is, how many bits do you use to represent each number? More bits means more precise math,
+but more memory and more compute. The industry standard for training had 16-bits, BF16. Deep Seek
+did the bulk of their training in 8-bits, which was half the size. And the reason this is a big deal
+is that everyone knew that you couldn't train a model this large in 8-bits. 8-bits is so few that
+the numbers get emphasized, errors accumulate, and training becomes unstable. It starts diverging.
+And suddenly you've burned millions of dollars on a model that doesn't work. The Frontier Labs
+largely avoided full FP8 training for exactly this reason. It was considered too risky at scale.
+Deep Seek was the first to actually pull it off on a model this size. And the reason connects right
+back to the constraint. 8-bit numbers are half the size of 16-bit. So that means that's half the
+memory. And that means half the data to ship between the chips. And if you remember, their whole
+bottleneck was communication bandwidth because of the chips that they were using. Because
+interconnect was throttled. By doing the math in FP8, they cut the volume of data moving across
+their throttled interconnect roughly in half. The number format wasn't just a compute optimization.
+It was a communication optimization aimed squarely at their specific weakness. But they didn't go
+fully 8-bit everywhere, and this is the craftsmanship part. They were surgical about it. The parts
+of the network that are sensitive to precision, which are the embeddings, the normalization layers,
+the attention operators, the master copy of the weights, those they kept in high precision. The
+parts that could tolerate low precision, like the big matrix multipliers that dominate the compute
+bill, those went to FP8. They mapped precision to need. So cheap 8-bits was used where it's safe,
+expensive high precision was used where it mattered. So this selective precision was the whole game
+with FP8. If you go fully 8-bit, your training will collapse. And if you stay fully 16-bit, you've
+left half your savings on the table. The skill is in knowing exactly which operations can survive
+the precision cut and which cannot. And that knowledge only comes from understanding both the math
+and the hardware at the same time. And they went even deeper than the model to squeeze the hardware.
+Deep Seek wrote some of the communication code below the level of Nvidia standard libraries,
+dropping down to a low-level instruction set to schedule how data moves between chips. That was work
+that normally only the chip vendor touches. And that's an extraordinary amount of effort, and most
+teams would never go there. But when your entire competitive position depends on beating a bandwidth
+limit, you go all the way down to the metal. The constraint pushed them into engineering that better
+funded labs never had a reason to attempt. Now, we'll have to be honest about what all this costs
+because there are trade-offs to every genius sounding technique, right? And as senior engineers, we
+don't get to skip the trade-offs. So, all of this aggressive optimization was expensive in ways that
+don't show up on the GPU build. It cost enormous engineering talent and time. Writing custom low-
+level GPU code, pioneering FP8 training that nobody had de-risked, building a load-balancing scheme
+from scratch. This is some of the hardest systems work in the industry. And it requires a rare
+concentration of people who understand machine learning and hardware at the same time. The five and
+a half million-dollar figure is the compute for the final training run. It definitely does not
+include the months of research, the failed experiments, the salaries of the people who could pull
+this off. So, the cheap number hides an expensive process. It also cost them generality and margin
+for error. A system this finely tuned to one specific hardware setup is fragile in a particular way.
+It's optimized to the H800's exact characteristics. Highly co-designed systems are powerful
+precisely because they're specialized. But specialization means the work doesn't automatically
+transfer when the hardware changes. Once you tune everything to one chip's bottleneck, you've
+coupled yourself completely to that chip. And FP8 training specifically is a permanent maintenance
+burden. Operating that close to the edge of numerical stability means a whole category of subtle
+bugs and instabilities that 16-bit training just doesn't have. And every future change has to
+respect the precision boundaries that they drew. You don't get the FP8 savings for free once you pay
+attention to it forever. And for DeepSeek, the bet paid off completely. The whole point is that they
+turned a crippling constraint into a defining strength of the system. They couldn't outspend anyone,
+so they out-engineered everyone. And that's the trade. And they chose it because they had to. And
+this is the lesson. Aggressive optimization is never free. You pay for it in engineering effort and
+in specialization and in fragility and in the talent required to maintain it. And the cheap final
+number is actually always sitting on top of a very expensive process. So, we shouldn't look at the
+final $5 number and conclude that frontier models are suddenly cheap. We have to look at it and
+understand what kind of engineering it took to get there. Now, this is the kind of thinking that we
+go deep down in the AlgoRock cohort. It's 12 weeks meant for senior engineers. We look at real
+systems and real trade-offs. And we don't teach you which model architecture to pick. We actually
+teach you how to reason about the kind of decisions DeepSeek's engineers had to make. So, if that's
+useful to you, you should check out algorock.io. Now, I want to leave you with a lesson that's
+actually bigger than DeepSeek. And the lesson is that the most aggressive efficiency rarely comes
+from more resources. It comes from a constraint sharp enough to force a better design. And the labs
+with unlimited budgets had no reason to invent any of this. But DeepSeek did because they had to.
+So, the next time when you're handed a constraint which you think is going to sink the project,
+which could be a tiny budget or a slow hardware, or the impossible latency target, you should sit
+with it longer than you want. Because the thing that looks like the reason you'll fail is very often
+the thing that, if you engineer around it properly, becomes the reason that you win. Now, making
+these deep dives takes a lot of time and work. And these diagrams are especially hard to build. So,
+please don't forget to subscribe to this channel and like the video, share the video. And if you
+have any questions, put them in the comments below. And I'll see you in the next video. Thank you.

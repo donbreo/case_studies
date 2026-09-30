@@ -1,0 +1,277 @@
+Instagram has scaled to 2 billion users on Postgres. Reddit uses Postgres, Notion runs on Postgres,
+Heroku, Strava, Discord, they all use Postgres at some capacity. And the reason that all of these
+systems chose to stay on a database that might not be able to scale is not because they didn't know
+about the alternatives. They actually knew about the alternatives and they evaluated them, but they
+still chose to stay with Postgres. And this video will try to answer the question, why do they all
+still use Postgres and what does it actually take to make Postgres work at planet scale? Now, as you
+can see, I've got a bunch of diagrams to show you guys and it'll be a highly visual video. And by
+the end of this video, you should have a clear picture of what the actual bottlenecks are when you
+scale a relational database. So, I want you to stick around till the end. Okay, so a quick bit of
+history first. It's 2010, Instagram has just launched. It's a very tiny team with just three
+engineers and their setup is honestly almost embarrassing in how simple it is. They're running on
+EC2, which is just Amazon's rented virtual machines, and the photos go into S3, and everything else,
+like the user accounts, photo metadata, comments, likes, the follow graph, all of it goes into a
+single Postgres database. That's it. That's the whole architecture. Three engineers, one database,
+no microservices, no Kafka, no fancy infrastructure of any kind, just Postgres doing its job. By
+2011, they're at 10 million users, but their infra is still simple. By 2012, when Facebook buys them
+for a billion dollars, they're at 27 million users on a 2 terabyte Postgres database, still with
+only a few engineers, and that's wild. And in this whole thing, there's a lesson buried that we're
+going to come back to at the end of this video. And the lesson is boring technology with good
+engineering beats new technology every single time. But by 2012, the single database setup is
+starting to crack. 2 terabytes, it's approaching the memory limit of the biggest EC2 instance you
+could rent at that time, and disk IO is saturated. They've vertically scaled the absolute max and
+there's nowhere left to go on on one single machine. So now we are at an important question. What do
+you do when one machine is not big enough anymore? The wrong answer is to panic and switch
+databases. The right answer is to figure out exactly why the database is struggling and then go
+ahead and fix that. So let's look at what exactly broke first. So the first wall that Instagram hit
+had nothing to do with data size. It had nothing to do with disk space. It had nothing to do with
+how many photos that people were uploading. It was something very simple that most engineers don't
+even think about, connections. About 1.3 megabytes per connection. That doesn't sound like much, but
+Instagram's Django servers were creating new connections constantly. Every Django process kept its
+own little pool of connections to the database. So imagine you've got 50 application servers and
+each one keeping 30 connections open to Postgres. That's 1500 connections and at 1.3 megabytes each
+you're at roughly 2 gigabytes of memory. And the database hasn't done a single useful thing yet.
+It's just sitting there holding the connections eating RAM. The fix is connection pooling and
+specifically a tool called PG Bouncer. PG Bouncer is a really lightweight proxy. It sits in between
+your application and Postgres. And from the application's point of view, it thinks that it's talking
+to a database, but it's actually talking to PG Bouncer. And PG Bouncer takes all those incoming
+connections from your apps and multiplexes them onto a much smaller pool of real connections to the
+actual Postgres server. So instead of 1500 connections eating 2 gigabytes of RAM, you've got just 30
+real connections handling all of the traffic. And now the database's memory is free for the stuff it
+actually should be doing, which is caching pages, sorting query results, planning queries, basically
+the way it's supposed to do. And that's it. Super simple. It's just a proxy. But here's the thing,
+this is the first invisible bottleneck pretty much every Postgres deployment hits. And most teams
+don't add a connection pooler until they're already in pain. So if you're running Postgres right now
+at any kind of meaningful scale and you don't have PG Bouncer or something similar to it sitting in
+front of your database, then that is the single highest leverage thing that you can fix this week.
+Okay, so they've got connection pooling now. Database is breathing again, but pretty quickly they
+hit the next wall, and this one is harder. Now, the database is 2 terabytes, and it's running on the
+biggest EC2 instance that Amazon will rent them. They've maxed out their RAM, they've maxed out
+their disk speed, they're at the ceiling. Even with PG Bouncer doing its job, the workload is just
+bigger than one machine can hold anymore. And this is the moment in pretty much every system design
+discussion you'll ever read, where the standard answer is, "It is now time to switch to NoSQL
+database like Cassandra, DynamoDB, or Mongo." The story that we've been told is that relational
+databases don't scale horizontally, so you've got to move to a different paradigm. And Instagram
+looked at this, they actually evaluated it seriously, they looked at Cassandra and MongoDB, they
+looked at all the NoSQL options that existed at the time, and after going through it, they decided
+on staying with Postgres. Because their analysis kept pointing to the same basic thing. The problems
+they were hitting were not Postgres problems, they were problems. Any database at the workload
+Instagram was running would hit the same walls. And switching to Cassandra does not make horizontal
+partitioning go away, it just hides it behind a different abstraction. And once you switch to
+Cassandra, you've burnt the boats, you don't really get to come back. So, they made a different
+call. Instead of switching databases, they decided to make Postgres itself horizontal. They were
+going to shard. But sharding is one of those words that gets thrown around a lot, and there's a
+really specific way Instagram approached it that turned out to be one of the most influential
+architecture patterns of the last decade. So, let's take a look at it now. Okay, now before we go
+any deeper, I want to take a few seconds to tell you about a cohort that I teach personally to 15 to
+20 senior engineers every few months, and it's called the AlgoRock cohort. We cover advanced system
+design and architecture for the post-AI world. Usually the people who attend are senior folks like
+SREs, platform engineers, principal engineers, enterprise and solution architect, and VP engineering
+guys also. There are people from 7 years all the way to 26 years of experience in this cohort. And
+this is a great way to learn from actual production case studies. The next cohort is going to be in
+July, and I want you to go through the website algorock.io, which is algorock.io, and I want you to
+go through the topics we're going to cover. We'll cover modern systems like how Anthropic handles
+LLMs and how Hugging Face handles so many sandboxes for AI models, and how Together AI hosts so many
+open-source models at scale. It's a 12-weeks program and each session is a 3-hours deep dive. And if
+you find this interesting, I want you to fill up the form that opens up when you hit the enroll
+button. Once you've done that, I'll check to see if you're a great fit and we'll set up a call with
+you. So, the live cohort is about $2,400 and it's taught by me personally. So, the live cohort is
+about $2,500 and it's taught by me personally. But if you just wanted access to pre-recorded videos,
+that'll be about $800. With both of these, you get lifetime access to the content. Now, if you're
+early in your career and beginning right now, this cohort might not be relevant to you because this
+is more geared towards experienced engineers. So, if you're new to engineering, please don't fill up
+the form. All right, now back to the video. Okay, so I want you to pay attention now because each of
+the ideas we'll discuss now will build up on the previous one. So, now Instagram has decided to
+shard Postgres, but the very first decision in any sharding scheme is, what are you going to shard
+by? Whatever column you pick to split the data, which is going to be your shard key, is going to
+shape every single query your application will ever make. So, you've got to get this right and you
+only really get one shot at it. For Instagram, the obvious answer was user ID because each user has
+photos, likes, their profile data, so you can partition by user. And everything belonging to user X
+lives on the same shard. And this sounds clean, right? And for queries that touch a single user,
+where the user says, "Show me my own profile," it is quite clean. You hash the user ID, you know
+which shard owns that user, you query that one shard, and you're done. Fast and easy. But Instagram
+is a social network. The defining query is not, "Show me my own photos." The defining query is,
+"Show me photos from the people I follow." And that query, in a sharded world, becomes a nightmare.
+Let's say I follow 200 people, and those 200 people are scattered across 50 different shards, which
+they will be because the shards are randomly distributed. And then fetching my feed means hitting 50
+different databases, getting partial results back from each one, and then merging and sorting them
+in the application layer. And that's slow, that's a lot of complexity, and it adds a whole new class
+of failure modes. Because what happens if one of the 50 shards is slow? Because then my whole feed
+will be slow. And this is the fundamental trade you make when you shard by user. You make single
+user queries really fast, and you make cross-user queries really expensive. There's no clever way
+around it. Every sharded system in the world has to make some version of this trade. And Instagram
+accepted this challenge. They bet that they could solve the cross-user query problem in the
+application layer, with caching, with smart fanout, with precomputed feeds. And they were right,
+they could. But the important thing to take away here is that the shard key decision is permanent.
+Once you've partitioned a few hundred terabytes of data by user, you don't get to change your mind.
+Resharding would mean rewriting every single row. So you've got to pick carefully. Okay, so
+Instagram decided that they'll shard by user, but here's the actual clever part. It's about how they
+sharded. Most engineers, when they think about sharding, they think about physical machines. You've
+got your user data, you spread it across 16 database servers, each server holds 1/16 of your users.
+And if you grow, you add more servers, you reshuffle the data. That's what most sharding
+implementation looked like back in 2010. Instagram did something different. They put a layer in
+between the data and the hardware. They created thousands of logical shards, completely independent
+from the physical servers that hosted them. So here's how it works. They picked the number, several
+thousand, and they created that many logical shards. In Postgres terms, each logical shard is what's
+called a schema, which is basically a namespaced collection of tables. So you've got shard zero,
+shard one, shard two, all the way up to several thousand. Each schema has the same tables, like
+users, photos, likes, everything, but each one holds a different slice of the actual data. And the
+thing is, in the beginning, all of those thousands of logical shards were sitting on just one
+physical machine. They shared the same hardware. The application didn't know or care. And from the
+application's point of view, it just looked up which logical shard owned the given user and queried
+that schema. So, what Instagram did was decouple two things that most engineers conflate. They
+decoupled how the data is partitioned from where the data actually lives. The data is partitioned
+into thousands of logical pieces forever. But the mapping of which logical shard sits on which
+physical machine, that's a totally separate concern. And that mapping can change. And here's where
+the design pays off beautifully. When one physical machine starts running out of space, you don't
+re-shard. You don't rewrite any data. You just move some logical shards over to a new physical
+machine and update the mapping table. That's it. Say physical node seven is getting close to full,
+maybe it's at 95% capacity. You bring up a new machine, say physical node 16. And 16 is not in this
+list because it'll be a new machine that will be brought up. So, you replicate half of node seven's
+logical shards over to node 16 using Postgres's built-in streaming replication. Now, once they're in
+sync, you update the mapping table. The table that says logical shard 1920 now lives on physical
+node 16. And the cutover is fast. The data didn't change. The schemas did not change. The
+application code did not change. Only the mapping changed. And you can see the whole thing mapped
+out here in a much better way. So, you had physical node seven, it was at 95% capacity, and we
+started moving data from node seven to node 16, which is a new machine. And afterwards, we had node
+seven at 50% and node 16 at 50%. And we had a mapping update. So, shard 1920 to 2047, instead of
+node seven, they now live on node 16. And that's the part that most engineers miss when they read
+about sharding. Because the mapping is the architecture. So, if you hardcode we have 16 shards into
+your application, then growing is painful. If you hardcode we have 4,000 logical shards mapped onto
+some number of physical nodes, then growing is just a config change. Now, if you remember nothing
+else from this video, I just want you to remember this one thing. Separate the partition of your
+data from where it physically lives. This is the pattern that lets you scale without rewriting. All
+right, so they've got their sharding scheme now, but now they've created a new problem that they
+didn't have before. So, you already know how things work in a single database setup, right? You use
+something called as auto increment IDs. We've all used it. So, every time you insert a new row,
+Postgres will hand you the next number, like 1 2 3 4. And these IDs are unique IDs because there's
+only one database handing them out. So, there is no way to collide. But, there is a problem with
+sharded setups, which is what now Instagram is going for. Because this, the auto increment IDs, they
+actually start breaking immediately. Because if shard zero is generating IDs 1 2 3 4, and shard one
+is also generating 1 2 3 4, you've definitely got collision instantly. That means in the entire
+software as a whole, you'll have two different photos with the same ID. And the problem is the
+application cannot tell them apart. And the whole thing falls apart immediately. So, now the
+question becomes, how do you generate unique IDs across thousands of independent shards without any
+of them having to coordinate with each other? And this one is the first solution, which is UUIDs.
+These are the long random strings, like the 128-bit identifiers that are basically guaranteed to
+never collide. But, the problem is these UUIDs are huge. And they're also random, so they have no
+inherent ordering. But, when you're storing billions of photos, you want to fetch the latest photos
+uploaded today. And random IDs make the database work harder than it needs to. So, this means you
+can't just use the ID as a proxy for time anymore. So, they ruled out UUIDs completely. Then,
+there's this really interesting ticket server approach, which is how another company called Flickr
+did it. This involves a dedicated service whose only job is to hand out unique IDs. And every time
+anyone wants to insert a row, they ask the ticket server. The problem is that it becomes single
+point of failure. If the ticket server goes down, nothing in your system can insert anything
+anywhere. So, they ruled this one option out as well. Then there's Twitter's Snowflake, which you
+can see on the screen right now. Snowflake is a distributed service for generating time-ordered IDs,
+and this was the closest to what Instagram actually wanted. But it required running a whole separate
+service alongside Postgres, which means just more moving parts, more things to monitor, and more
+things that could break. And they didn't really like that. So, Instagram did something generally
+clever. They actually built Snowflake-style IDs directly into Postgres itself. So, let's talk about
+how it works. Now, every Instagram ID is actually a 64-bit number, and that 64-bit number is split
+into three different pieces. The first chunk, which is the high-order bits, 41 bits, that's actually
+a timestamp. So, that's basically the milliseconds since a custom Instagram epoch. And 41 bits gives
+you 41 years of millisecond timestamps. That's plenty. The next chunk is 13 bits, and that's the
+shard ID, which is basically which logical shard generated this particular ID. 13 bits gives you up
+to 8,192 possible shards, which is way more than what they needed. Now, the last chunk was 10 bits,
+and it's just a sequence number. Within a single shard, within a single millisecond, you can
+generate up to 1,024 unique IDs. So, that's a million IDs per second per shard, and that's more than
+enough for our workload. Now, the really awesome part of this is that it's implemented entirely as a
+Postgres function. So, there's no external service. Every shard has a small function in the database
+that, when called, looks at the current time, looks at the shard's hardcoded ID, increments the
+sequence counter, and combines those three pieces into a single 64-bit number. So, you don't need
+coordination with any other shard. There is no external dependency, and there's no single point of
+failure. And because the timestamp is in high-order bits, the IDs are roughly sortable by time,
+which means a query saying, "Show me the latest photos" becomes sort by ID with descending order,
+and then take the top 20. So, you don't need a separate timestamp index. The ID is itself the
+timestamp. Now, this pattern that they created is now copied across the entire industry. Discord,
+Slack, and many large-scale applications use this, but it started here. All right. Now, earlier in
+this video, I had said that there's a lesson that we'll come back to later on in this video, which
+was that boring technology, if implemented well, actually does way better than a new technology. And
+there's a phrase that gets passed around in senior engineering circles a lot, and it is that boring
+technology is actually a superpower. And what that means is that every team has a finite budget of
+complexity that it can afford to manage. So, every new piece of infrastructure that you adopt eats
+into that budget. Because now, for this new technology, you've got to learn its quirks, you've got
+to build operational expertise around it, you've got to train your team, and you've got to hire for
+this new technology. And these costs are very real, even though they don't show up on a balance
+sheet. So, boring technology like Postgres, Linux, Memcached, Nginx, they cost almost nothing to
+adopt team already knows it, and the internet is full of answers to your problems already. Because
+the failure modes for all these technologies are documented really well in books, and the
+operational tooling has been around for more than 15 years. And the right time to spend your
+complexity budget is when you've genuinely got a new problem that the boring stuff cannot solve.
+Like, for example, vector search at scale, or real-time time series analytics, or graph traversal at
+planet scale. Those are categories where specialized databases are definitely required, and you
+should use them. But, if you just have a lot of users, that's not a new problem. Every system at
+scale has a lot of users. Postgres can handle a lot of users. Instagram proves it, Motion proves it,
+Reddit proves it, and GitHub proves it for a lot of their workloads. Even Stripe uses Postgres at
+some capacity. The mistake that most teams make is not picking the wrong database, it's switching
+databases too early, when the real fix was just to understand their existing database better. By the
+way, I have two awesome playlists on this channel I want you to watch. The beginner system design
+playlist, which has more than 50 videos now, filled with basic concepts, and the intermediate system
+design playlist, which has more than 10 videos now. And these are on slightly more complex topics.
+Once you binge-watch both of these playlists, you'll know system design better than 99% of the
+people on the planet. And if your work involves building complex systems and fixing issues in
+production, you should check out my microservices architecture video. This has almost 100,000 views
+on YouTube already. And you can also check out the technology architect playlist that I have on this
+channel. Now, before we wrap up, I want to talk you through three post features that Instagram
+leaned on heavily. These are features that most engineers either don't know exist or they don't use
+them. Even though they're sitting right there in the database, they're already running. Each one of
+these is small, but each one is incredibly powerful. And together, if they're used correctly,
+they're a big part of why post is holds up at this scale. First one is partial indexes. Now, you
+know the normal way that index works, right? You tell post to build an index on the created at
+column, and post maintains an entry in that index for every single row in the table. So, if you've
+got a billion rows, your index has a billion entries. But a partial index is different. You tell
+post only put an entry in this index if the row matches a particular condition. So, if you've got a
+billion photos in a table, but you only really query the ones from the last 30 days, you can build
+an index that only includes the recent photos. Now, your index has, say, just 100 million entries
+instead of a billion entries, 10 times smaller. So, 10 times faster to scan, and it naturally stays
+small as old data ages out. The second one is functional indexes. A normal index indexes the value
+sitting in a column. A functional index indexes the result of a function applied to that value. That
+sounds abstract, but the use case is concrete. So, hear me out. Instagram had columns with really
+long string values, like 64-character random tokens. And indexing the entire string would have been
+wasteful because all 64 characters end up duplicated inside the index. Instead, they used a
+functional index that only indexed the first eight characters of each token. And because of this,
+the lookups stay fast because most eight-character prefixes are unique enough, and the index is
+roughly a tenth of the size it would otherwise would happen. Now, this is the kind of thing that
+doesn't matter when you have 10,000 rows, but it matters a lot when you have 10 billion rows. And
+the third is something called as logical replication. Now, this is probably the most underrated
+Postgres feature, and logical replication lets you stream every insert, every update, every delete
+on a given table out to downstream systems in real time as they're happening. So, you can configure
+your primary database to publish all changes on the photos table, and then a search index subscribes
+to that stream and updates itself automatically. And a cache layer subscribes and invalidates
+entries as they change. An analytics warehouse subscribes and keeps a real-time copy for reporting.
+And your primary database does what it should, be the source of truth. And your downstream systems
+just stay in sync. Now, a lot of teams, some of which I know personally, build something like this
+manually with application-level event publishing, with Kafka, with dual writes, and all of that
+stuff. Postgres, by the way, has all of this built in, and nobody knows about it. Okay, now,
+something very important, which is that everything we've covered in this video so far is the
+historical story. It's the story of how Instagram scaled Postgres from 2010 to roughly 2015. And
+that story is foundational, the architecture pattern for it is still influential today, and the
+lessons are still completely valid. But, Instagram in 2026 obviously does not use Postgres. After
+the Facebook acquisition, Meta integrated Instagram into its broader internal infrastructure. So,
+the entire social graph today, like the who follows who, who liked what, that kind of data, that's
+actually served by something called a Tao, which is a distributed system which Meta has built
+specifically for graph workloads at their scale. Okay, now, for some quick takeaways. First, don't
+shard until you absolutely have to. Most teams reach for sharding way too early. And you've learned
+from this video that Instagram did not shard until they were at 27 million users. Second is, when
+you do actually decide to shard, separate the logical from physical. Don't hardcode the number of
+shards in your application. And you should create many logical shards, like we learned. Third is you
+should use snowflake-style IDs from day one, even if you're not sharded yet, even if you don't plan
+to be. Migrating from auto-increment IDs to snowflake IDs after you have billions of rows is very
+painful. So, do it beforehand. Fourth is that connection pooling is the first visible bottleneck. If
+you're running Postgres at any kind of meaningful scale right now, and you don't have PG bouncer or
+something like that set up, then that's the single highest leverage thing you can do this week.
+Fifth is that boring tech wins more often than not. So, you should adopt new infrastructure only
+when you have a genuinely new problem. Now, this is the kind of thinking we go really deep on in the
+AlgoRock Cohort, which is 12 weeks for senior engineers only. We build real systems, and we look at
+real trade-offs. So, if that's something you're interested in, check out algorock.io, and fill up
+the form that opens up when you hit the enroll button. Okay, now let's wrap this up. Most engineers
+think that Postgres cannot handle planet-scale workloads, but Instagram showed us the truth. And
+what we've learned is the database is not the bottleneck. The architecture around it is the
+bottleneck. And Instagram hit many walls. They hit the connection pooling wall, the vertical scaling
+wall, and the IDs wall. And then they invented snowflake-style IDs for Postgres. And they also built
+a logical-to-physical mapping for the shards. So, the lesson in this video was not just use Postgres
+because Instagram uses Postgres. The lesson is understand what you already have before you reach for
+something new. Now, making these deep dives and all these diagrams takes a lot of effort, so don't
+forget to subscribe to this channel. Share this video with people. Like this video, and comment if
+you have any questions, and I'll see you in the next video.

@@ -1,0 +1,138 @@
+Today, we're going to talk about consistent hashing. And it's one of those algorithms that sounds
+intimidating, but it's actually quite straightforward once you see it. Now, consistent hashing is
+everywhere. If you've ever used Memcached, Redis clusters, DynamoDB, or Cassandra, consistent
+hashing is the thing quietly deciding which server your data lives on. So, CDNs use it, Discord uses
+it. It's generally one of the most common algorithms in distributed systems. But when you talk to
+most engineers, and if you ask them how consistent hashing actually works, they'll say, "Well, I
+remember learning it once. That's something you do about a ring. And and that's all they know,
+right?" And that's okay for a while until the day your cache hit rate collapses because one server
+went down, or you notice one node in your cluster is doing five times the work of the others. Then
+suddenly, you really want to understand consistent hashing. So, let's walk through this properly.
+It's just a simple story of why the obvious approach fails and what consistent hashing does about
+it. So, here's the problem we're trying to solve. You have a bunch of servers, say about 10 cache
+servers, and you have data, lots of it. The question is, how do you decide which piece of data lives
+on which server? And more importantly, how do you decide it in a way that doesn't fall apart when
+you add or remove a server? That second part is where it gets interesting. So, let's start with the
+obvious approach. It's called modulo hashing, and it's what most people would reach for first.
+You've got 10 servers, we take each key, hash it, and do mod 10. So, each key goes to server hash
+key mod 10. So, user 42 might end up on server two, user 43 might end up on server five, and so on.
+It's simple and fast, and it works perfectly until one of the server dies. Then you've got only nine
+servers, and your formula becomes hash key mod nine. And here's where it gets bad because of how
+modulo math works. About 90% of your keys now map to a different server than they did a minute ago.
+So, it's not just 10%. It's not just the keys that were present on the dead server. It's actually
+90% of your servers. So, just to put that into perspective, think about what that means. If you had
+a million keys in your cache, 900,000 of them are suddenly in the wrong place. So, every single one
+of those misses hits your database. Now, in case this didn't make sense to you, the whole part about
+caching, cache missing, and cache hitting, and then hitting the database, then you probably need to
+watch my playlist on beginner-level system design. It has about 50 videos, and it covers caching,
+cache missing, and all these cache servers in a lot more details. And this particular video is part
+of the intermediate system design series, where I expect you to understand the basics of system
+design first, and then come to this series. And if you binge-watch both of these series, you would
+know system design better than 99% of the people on the planet. So, let's come back to our database,
+which is now suddenly getting a lot of traffic because of all those cache misses. So, now the
+database might also fail over. And one server dying just took down your entire system. Now, you
+might think just adding a server could fix everything, but adding a server is barely any better.
+Going from 10 to 11 servers remaps about 91% of the keys, and even scaling up causes the same
+problem. So, modulo hashing has one fatal flaw. It can't handle change. And that's the problem
+consistent hashing was invented to fix. Okay, so here's the idea. Forget modulo. Instead, imagine a
+circle, a big one, and let's call it a ring. Now, you take all your servers and hash them onto this
+ring, and each server lands at some random position on the circle. Server A here, server B over
+there, server C somewhere else. Then you take your keys and hash them onto the same ring, and each
+key lands at some position, too. And the rule for which server now owns which key is super simple.
+You start at the key's position, you walk clockwise, and whichever server you hit first, that's the
+server that owns the key. And that's it, that's the whole idea. Keys and servers live on the same
+ring. Each key goes to the next server clockwise, and that's it, done. Let's say it's server B that
+dies. The only keys that need to move are the ones that were pointing to server B. Those keys walk
+clockwise a bit further until they hit the next server, and let's say that's server C. So, now those
+keys actually belong to server C. And here's the awesome part. Every other key in the system, all
+the keys that are pointing to server A, and all the keys pointing to server C, and all the keys
+pointing to server D, they don't move at all. They're completely unaffected. So, with 10 servers,
+when one dies, only about 1/10 of your keys need to move. Instead of 900,000 cache misses, we just
+get 100,000 cache misses. So, your database survives, your system heals itself in a few seconds, and
+adding a server works the same way. The new server lands somewhere on the ring and takes over a
+slice of keys from whoever was handling that area. Everyone else is unaffected. And that's the whole
+point of consistent hashing. It bounds disruption. Instead of everything changing when a server
+changes, only a small slice changes. But, there is a catch. If you try to use a ring exactly the way
+I just described, which is one point per server, you'll run into a problem pretty quickly. The
+problem is that hash functions are not fair. They're random. And when you only have a handful of
+points scattered randomly on a big ring, they don't spread out evenly. And just because of the
+mathematics of the hash functions, you'll start getting clusters. So, two servers end up sitting
+really close together on the ring, which means there's a huge gap somewhere else. And whichever
+server is sitting at the edge of the huge gap, it ends up owning way more keys than it should. And
+in practice, with just five servers, you might end up with one server owning 40% of your keys, and
+another owning just 5%. So, one server is drowning in traffic, and another is barely doing anything.
+And that's obviously not what we want. We distributed the data so we could spread the load, but the
+ring as described so far does not actually spread the load very well. So, we need a fix for this.
+And the fix is actually really clever, and we'll talk about that in a minute. Now, before we
+continue, I want to take a few seconds break and go a bit off topic and tell you about the AlgoRock
+Cohort, which is a live cohort that I personally teach. I select about 10 to 15 senior engineers in
+that cohort. And you might be aware that there are no cohorts that exist for senior engineers.
+Basically, people who already know the basics of architecture and system design, and are wanting to
+build the next generation of production software in the post-AI world. So, this is a 20-weeks
+program, and we cover topics like advanced system design, AI in the system design, architecture for
+the post-AI world, and tips and tricks to using AI coding tools, but from a senior engineer
+perspective. Now, I'm planning the next cohort, which is actually going to be my third cohort,
+around the mid or end of May 2026. So, I want you to go to the AlgoRock website, which is
+algorock.io, and check out all these topics that we're going to cover. And if you like this, I want
+you to fill up the form that opens up when you hit the enroll button. Once you fill up the form,
+I'll check to see if you're a great fit, and we'll set up a call with you. So, it's $2,500 for the
+entire live cohort, and I teach the cohort personally. Now, it's a great experience, and once you
+fill the form, you can also talk to any of the people who have attended the cohort previously, and
+then decide if you want to go ahead. Now, in case you just want access to the pre-recorded cohort
+videos, that's about $800. All right, now back to the video. Okay, so we were talking about a fix,
+and the fix actually we're talking about is something called as virtual nodes. Instead of placing
+one point on the ring for each server, you place a whole bunch, like 100 or 200. So, server A
+doesn't get just one position on the ring, it gets positions for hash A1, hash A2, hash A3, all the
+way up to hash A200. So, 200 little dots scattered around the ring, all representing server A.
+Server B does the same thing, so 200 dots for server B. Server C, 200 dots, and so on. Now, the ring
+is densely populated, and because the hash function is random, these dots spread out much more
+evenly, and the clustering problem goes away. And with 200 virtual nodes per server, the load
+distribution becomes close to perfect. So, instead of one server getting 40%, and another getting 5%
+of the traffic, every server gets roughly an equal share. And there's a bonus. Virtual nodes give
+you a knob you can turn. So, if you have a beefy server with 32 cores, you give it 400 virtual nodes
+instead of 200. Now, it automatically handles twice the traffic of the smaller servers. You didn't
+have to write any special routing logic. The math just works out. And there's also one more nice
+thing. When a server with 200 virtual nodes dies, those 200 dots each sit next to a different
+server's dots on the ring. So, when the dead server's load needs to go somewhere, it spreads out
+evenly across all the remaining servers. Nobody gets slammed, and everybody picks up a tiny bit of
+the load. So, here's the takeaway. In any real system, you're using virtual nodes. The one point per
+server version of the ring is just how we explain the idea. Production systems always use virtual
+nodes. Okay, so now we've covered the theory, but let's talk about what actually happens when a
+server dies in production. Three things happen one after the other. First, the system has to notice
+the server is gone. Usually, there are health checks pinging each server every few seconds. And
+after a few failed pings, the system declares the server dead. This usually takes somewhere between
+5 and 30 seconds. Second, every client needs to learn about the new ring. Either someone pushes a
+config update to all of them, or they pick it up through service discovery. And now all clients know
+that the dead server is gone, and they route around it. Third, the keys that got remapped start
+getting requested. They're not on the new server yet, so they become cache misses. The new server
+fetches them from the database, and caches them going forward. Now, what this looks like from the
+outside depends on what kind of system we're talking about. If it's a pure cache, like Memcached,
+the remapped keys are just missing. They get rebuilt on the next read, and you see a little bump in
+cache misses for a few seconds, and your database handles it, and life goes on. But, if it's a
+database like Cassandra or DynamoDB, the data actually has to be there. You can't just rebuild from
+the database, because it is a database. So, these systems do is replicate every piece of data to the
+next two to three servers on the ring. And when a server dies, the replicas already have the data.
+There's no scrambling to move anything. The ring just redirects traffic, and the replicas serve it.
+So, in both of these cases, the total customer visible impact is usually under 2 minutes of slightly
+elevated latency. There is no outage. And this is the whole promise of consistent hashing. In
+Memcached specifically, a client library called Zipkin Tama uses it. And CDNs like Cloudflare and
+Akamai use it to route you to the nearest edge server. And Discord uses it to make sure all of your
+web socket traffic lands on the same gateway server, so your real-time messages stay consistent. So,
+it's just one of the algorithms that's quietly running inside a lot of the software that you use on
+daily basis. But, I want to give you a quick reality check. You don't always need consistent
+hashing, and in most cases, it's actually an overkill. So, if your server count is fixed and never
+changes, just use Modulo, it's simpler. If you can tolerate a short maintenance window when you're
+re-charting, you don't need this either. Consistent hashing is actually very useful when your system
+is dynamic, and servers are being added, removed, scaled up, scaled down constantly. That's when the
+90% of keys leave map problem becomes a real operational headache, and consistent hashing is the
+clean way to solve it. So, it's not a default, it's a tool for a specific kind of problem. Okay, so
+let me leave you with the one idea to take away. Consistent hashing does not make change free.
+Servers still come and go. Keys still need to move around. What it does is bound the damage. Instead
+of everything changing, only a small slice changes, and that's the difference between a cache miss
+storm that takes your database down and a little blip that nobody notices. And we learned about
+virtual nodes, which are how you actually make the load actually even. Without them, the idea is
+nice, but it doesn't really work. But, with virtual nodes, you get a distribution that's close to
+perfect and a knob you can turn for different server sizes. So, that's consistent hashing, the ring,
+the clockwise walk, the virtual nodes, bounded disruption. I'm sure you appreciate how much work
+goes into building these videos and these diagrams. So, please subscribe, like, and share, and drop
+a comment if you have any questions. And I'll see you in the next video.

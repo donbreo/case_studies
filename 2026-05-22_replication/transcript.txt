@@ -1,0 +1,205 @@
+Most engineers, when they hear the word replication, just think of databases. Like replicated
+Postgres, replicated MongoDB, and read replicas, right? That's where the term shows up mostly in
+tutorials. So, that's the mental model people walk away with. But, if you've worked on production
+systems for a few years, you know that replication is actually a much bigger concept. And senior
+engineers replicate everything that matters in their infrastructure. So, databases, obviously, but
+also load balancers, queue brokers, caches, API gateways, even entire data centers. So, the mindset
+that you want to walk away with is not just let me replicate my databases so that if one goes down,
+I have the other one. The mindset actually should be what in this system that I've built can
+actually fail, and how do I make sure that failure does not take everything down with it. Now, some
+of you are also actively preparing for interviews. And if you've ever been asked in a design review,
+what happens when this component dies, and you probably give a vague answer about backups, well,
+replication actually will help you there as well. Replication is one of those concepts that
+separates senior engineers from everyone else. It actually involves looking at every different
+component in your system and instinctively asking, what happens if this dies, and how do I make sure
+that it doesn't take everything else down with it. By the end of this video, you'll know which
+components actually need replication, what the patterns look like for each one, what replication
+cannot fix, and how to make the call between replicate this and leave it alone. So, I have a bunch
+of diagrams to show you today, but let me start with the simplest possible example. Imagine your
+system has one database, one load balancer, one Kafka broker, and one Redis cache. Each of these is
+doing its job perfectly. Now, imagine that any one of them fails. The database disk gets corrupted,
+the load balancer's machine reboots, the Kafka broker runs out of memory, or the Redis instance hits
+a network partition. Whichever one fails, your entire system goes down. Not just a part of it, but
+all of it, because every one of these components is in the critical path of every request, and any
+single failure breaks the entire chain. This is what engineers mean when they say single point of
+failure. It's not about databases, it's about any component your system depends on that does not
+have backup. A mature production system doesn't have single points of failures in its critical path,
+and the way you eliminate single points of failure is with replication. So, here is the plan for our
+video. We'll start by reframing replication as a fault-tolerance strategy, and not just a database
+technique. Then, we'll talk about what fault tolerance and failure actually mean, and we'll do this
+quickly because each of these topics will have its own dedicated video in this playlist. Then, we'll
+walk through every critical component in a typical system and see what replication looks like for
+each one because the patterns are similar, but not identical. Then, we'll cover the cost of
+replication, which are real and actually worth taking seriously. Then, we'll talk about the
+difference between active and passive replication, which is one of the deepest mental models for
+thinking about this. Then, we'll cover the failure models that replication does not fix because
+overconfidence is dangerous. And finally, we'll talk about how senior engineers actually decide what
+to replicate and what to leave as a single instance. Now, this video assumes that you've heard about
+replication and you've heard about replication of databases, but we're going one level up to the
+architectural mindset that makes the mechanics matter. Before we go any further, let's quickly
+define two terms: failure and fault tolerance. Each of these has its own dedicated videos in this
+playlist, so I'll keep this short. A failure is when a component of your system stops working. Like
+a machine crashes, a network link drops, a disk fills up, a process gets killed by the OS. Any of
+these is a failure. Fault tolerance, on the other hand, is a system's ability to keep working even
+when failures happen. So, don't think about it like no failures will ever happen. That's actually
+impossible. Fault tolerance actually means the system survives failures gracefully. And the
+relationship between these two is important. Failures are inevitable. Fault tolerance is actually a
+design choice. You actually don't get fault tolerance by just hoping that nothing breaks. You get it
+by designing your system to expect breakage and handle it. And replication is one of the most
+powerful tools in the fault tolerance toolkit because it directly addresses the most common cause of
+system-wide outages, which is a single component dying and taking down everything with it. Now, let
+me show you what mature engineers actually replicate. We're going to walk through every critical
+component in a typical production system one by one. Let's start with the most familiar one,
+databases. So, you replicate databases for the reasons most people understand. Durability in case
+the disk fails, availability in case the machine goes down, read scaling in case one machine can't
+handle all of the read load. The standard pattern that everyone follows is having one primary
+database that accepts all the rights, plus one or two replicas that follow along. If the primary
+database dies, one of the replicas gets promoted to take over. And most production databases run
+with at least two replicas in addition to the primary database. So, you can lose one and still have
+redundancy left. Now, the thing that senior engineers think about that the beginners don't is where
+those replicas live. If all three copies of your data are in the same data center, a fire or power
+outage takes out all three. So, serious and critical systems actually put replicas in different
+availability zones. And for really critical data, they're put in different regions entirely. So,
+geography also matters in these cases. Now, let's look at replication in load balancers. Most
+engineers don't realize they need to think about this. They put a load balancer in front of their
+app servers, and then they think everything is now scalable and forget that the load balancer itself
+is now a single point of failure. Because the load balancer essentially handles all of the traffic
+coming to the application. And if it dies, no traffic reaches anything behind it, no matter how many
+app servers you have. So, it's better to replicate load balancers as well. And usually, we do this
+in an active-passive setup where one load balancer handles all the traffic and another sits idle,
+ready to take over when things go down. The takeover happens through a virtual IP address that
+floats between them or through DNS level failover or through a higher level routing layer. Cloud
+providers like AWS abstract this away from you, or hide this detail from you. Because when you
+provision an application load balancer, you're actually getting a replicated set of load balancers
+under the hood. AWS handles all of the failover for you, and you just see one logical endpoint. But
+that does not mean that replication is not happening. It just means someone else is doing it for
+you. If you're running your own load balancers like Nginx, HAProxy, Envoy, you're responsible for
+the replication. And if you forget to replicate, you've actually now built a system whose front door
+is a single point of failure for the entire software. Now, let's talk about replication for queue
+brokers like Kafka or RabbitMQ. These are critical infrastructure, and if your queue dies, your
+async pipeline stops. Your orders don't get processed, your notifications don't go out, and
+background jobs queue up indefinitely until they time out. Now, replication for queues works a
+little differently than for databases. Kafka replicates each topic partition across multiple
+brokers. You configure a replication factor, typically three, and one broker is the leader for that
+partition. The others are just followers. The rights go to the leader, get replicated to the
+followers, and only then get acknowledged when enough followers have the data. Now, if a broker
+dies, partitions where it was the leader fall over to another broker. The system keeps producing and
+consuming messages. Some in-flight requests might fail and need to retry, but the queue as a whole
+stays alive. This pattern is similar across queue systems. RabbitMQ uses quorum queues, NATS
+Jetstream uses replicas. The common idea is that no message lives on only one machine, and no broker
+is irreplaceable. Now, before we continue, I want to take a few seconds break and go a bit off topic
+and tell you about the AlgoRock cohort, which is a live cohort that I run usually with 10 to 15
+senior engineers in a cohort. The reason I do this is because there are no cohorts that exist for
+senior engineers who already know the basics of architecture and system design, and are wanting to
+build the next generation of production software in the post-AI world. So, this is a 12-weeks
+program, and we cover topics like advanced system design, AI native system design, architecture for
+the post-AI world, and tips and tricks to using AI coding tools, but from a senior engineer
+perspective. I'm planning my next cohort, which is actually my third cohort, around mid or end of
+May 2026. So I want you to go through the algo.io website, which is algo.io, and I want you to go
+through this list of topics that we're going to cover. If you like that, please fill up the form
+that opens up when you hit the enroll button. And once you do that, I'll check to see if you're a
+great fit and we'll set up a call with you. So it's about $2,500 for the entire cohort and I teach
+the cohort personally. It's a great experience and once you fill the form, you can actually talk to
+any of the people who have attended the cohort previously and then decide if you want to go ahead.
+But if you just wanted access to the pre-recorded videos, that's just $800. All right, now back to
+the video. Next are caches, specifically Redis or Memcached clusters. If your cache is purely a
+performance optimization, meaning if it goes away, your system will still work, but just a little
+bit slower, you might not need to replicate it at all. You can just let it die and rebuild from the
+source on the next request. But if your cache is in the critical path, meaning your application
+cannot function without it or rebuilding it takes so long that a cold start with crash your
+databases, then yes, you need to replicate. Uh Redis has a primary and replica model similar to
+Postgres. Redis cluster shards data and replicates each shard. So as a senior engineer, you would
+ask, is your cache an optimization in your system or is it a dependency? And the answer to that
+question will determine whether you need the replication complexity or not. Now the next logical
+components are API gateways and reverse proxies. So it's the same logic as load balancers. If your
+API gateway is a single instance, it's a single point of failure for every external request. So you
+run multiple instances behind a load balancer or if you're using a managed service like AWS API
+Gateway, it's already replicated for you under the hood. The thing to watch out for is configuration
+drift. So if you have three API gateway instances and they slowly fall out of sync because someone
+updated the routing rules on one, but not the others, then you've created an even harder failure
+mode, which will have random behaviors depending on which instance the request hits. So, replication
+only helps if the replicas actually contain the same configurations. And now I want you to zoom out
+and think about the entire data centers and replication at the data center level. Even with
+everything inside the data center properly replicated, the data center itself is a single point of
+failure. Power failures, network outages, cooling failures, fiber cuts, all of these can take a
+whole region down. AWS, Google Cloud, and Azure have all had multi-hour region-wide outages. So, the
+really critical systems actually run in multiple regions, not just multiple availability zones in
+one region. They actually run in multiple regions, like banking systems, payment processors,
+critical SaaS platforms. They run active in two to three regions at once with traffic routed by
+geographic DNS or by global load balancers. Multi-region replication is the most expensive and
+complex form of replication. Latency between regions is high. So, keeping data consistent across
+regions is hard, and failover testing is generally scary. But, for systems where being down for an
+hour costs millions of dollars, the cost of multi-region replication is justified. So, the general
+rule here is that the more catastrophic the failure mode, the further apart your replicas should be.
+So, process replicas survive process crashes, machine replicas survive machine failures, rack
+replicas survive rack failures, and zone replicas survive zone failures. And if you take that logic
+further, region replicas survive entire region failures. So, you can pick the level of replication
+that matches the failure modes that you're willing to accept based on how critical your software is.
+So, now I'll take you through another mental model, which is the active-active versus active-passive
+replication. We will have a dedicated video just for this, but for now I just want to still cover it
+in this replication video because it's quite critical. So, you have the active-active approach and
+the active-passive approach, and these two approaches have very different personalities, and the
+choice you make has implications for cost, complexity, and recovery time. So, active-active means
+that all replicas are doing real work. So, if you think about load balancers which have been
+replicated, then both of these will be serving traffic. If you think about data centers that have
+been replicated, then both of these data centers are accepting requests. If you think about database
+nodes that have been replicated, then both of these database nodes will be taking rights, especially
+if it's a multi-leader setup. So, there is no idle capacity. Everything you're paying for is
+producing value. The good thing about active-active is that you're using all your hardware. The
+other good thing is that failover is fast. When one replica dies, the others are already serving
+traffic, so there is no warm-up period. Traffic just shifts. The hard thing is that active-active
+means you have to handle the consistency problems that we have talked about, like multiple machines
+making decisions in parallel, conflicts, coordination overhead, and so on. And the other approach,
+which is active-passive, means one replica does all the work and the other sits idle as a standby.
+The standby is fully provisioned, fully configured, fully up-to-date with replicated data, but it's
+not actually serving any requests. It's just waiting. So, when the active node fails, the passive
+node takes over. There is a small delay during the takeover, usually seconds, but sometimes it's
+longer, during which the system is partially down, but the operational model is much simpler. Only
+one node makes decisions at a time, no conflicts, no coordination overhead. Now, most production
+systems use actually a mix, active-active for stateless layers like load balancers and app servers,
+and active-passive for stateful layers like primary databases. The reasoning is that stateless
+components don't have consistency problems, so you might as well use them all, and stateful
+components have consistency problems. So, simpler is better, unless you need the extra capacity.
+Now, let me tell you what replication does not fix because it is not a silver bullet. Replication
+protects against random hardware failures, like a disk dying, a machine crashing, a network link
+going down. For these, replication is the right answer. But, replication does not protect against
+bugs that corrupt the data. If your application writes bad data to the primary, the primary
+replicates it to the followers, and now all your replicas have bad data. Replication does not make
+data more correct. It makes incorrect data more durable. And replication also does not protect
+against operator errors. If an admin accidentally drops a table, that drop replicates to all of the
+followers within seconds. Your three replica setup just lost the table three different times.
+Replication also does not protect against attacks. So, if someone gets into your system, deletes
+your data, replication faithfully copies the deletion everywhere. Replication also does not protect
+against software bugs in the replication system itself. So, if your replication has a subtle bug
+that makes followers diverge from the leader, then you will have multiple machines with different
+data and no way to know which one is right. This is why backups are not replicas and replicas are
+not backups. They serve different purposes. Replicas protect against hardware failures. Backups
+protect against logical failures like bugs, mistakes, attacks. You need both of them. And some teams
+skip backups because they think they have replicas and find out at the worst possible moment that
+the replicated data is uniformly wrong. So, let me close with how senior engineers actually decide
+what to replicate. The mental model is straightforward. For every component in your critical path,
+you have to ask three questions. What if this component fails? So, if the answer is the system keeps
+working like a stateless app server in a fleet of dozens, you don't need to think about it
+specifically because the fleet itself is already replication. If the answer is the system goes down,
+that's a single point of failure and you should consider replicating it. The second question is how
+likely is this component to fail? So, different things have different failure rates. Disks fail more
+often than CPUs and single machines fail more often than entire data centers. The more likely the
+failure, the more value replication provides. The third question is what's the cost of replicating
+it? Some replication is cheap, like adding a second load balancer is just very straightforward, but
+some replication is expensive. For example, multi-region active-active replication for a
+transactional database can cost an order of magnitude more than just single-region replication. The
+cost has to match the value. Once you've answered these three questions for every critical
+component, you have your replication strategy. Replicate the components where failure would take the
+system down and where failure is likely enough to worry about and where the cost of replication is
+justified by the cost of an outage. So, on the screen right now, you can see a diagram of how I've
+answered those three questions for each of these components. Now, the goal is not to replicate
+everything. The goal is to make sure no single failure can take down the whole system. There are
+different objectives and the difference matters when you're making engineering trade-offs. So, that
+was replication for senior engineers. So, so now you know that replication is not a database
+technique. It's actually a fault tolerance strategy. So, the mindset is that no critical component
+should be irreplaceable. The discipline to think about that at every layer of the stack and not just
+the databases [clears throat] is important and the honesty to know about what replication does not
+fix. And also, you need the judgment to apply it where it actually matters. Now, I'm sure you
+appreciate how much time and work goes into building these diagrams and making these videos. So,
+please subscribe and like and share this video and drop a comment if you have any questions and I'll
+see you in the next video.

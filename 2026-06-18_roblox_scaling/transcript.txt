@@ -1,0 +1,247 @@
+In August 2025, Roblox had 47 million people online and playing at the same moment. And this kind of
+scale had never been seen before. Now, if you've been an engineer for a while, you know that
+concurrent users is a huge problem to be solved. And 47 million concurrent users is simply crazy.
+Just a year earlier, the peak was about 10 million. Almost all of that jump from 10 to 47 came from
+just one game. And the game was called Royal Garden, which doubled the platform's whole peak in
+about 2 months. Now, traditional multiplayer games never come close to a number like that. So, World
+of Warcraft or Final Fantasy run a few thousand players in one shared world. EVE Online, another
+game, pushed it the furthest anyone ever has. Its entire player base lives in one shared universe,
+and even that peaks around 100,000. Roblox is running about 500 times that traffic. To pull all this
+off, Roblox had to build things almost nobody has ever built. They wrote their own programming
+language. They built their own cloud on hardware that they own in their own data centers. And they
+run all of this on an architecture that's the opposite of how every other multiplayer game works.
+Today's video is for you if you're a platform engineer, an SRE, a DevOps engineer, or you work on
+any system that has to take sudden unpredictable loads. Okay, so 15 years ago, Roblox decided that
+the game server is not the thing you scale at all. The thing you scale is the layer above it. It's
+the part that decides which server runs which game for which players. And that one decision shapes
+everything else they had to build, like how matchmaking works, where the data lives, why they run
+their own hardware, how the survival viral game, and why a crash never spreads. Every big
+multiplayer game since World of Warcraft works the same way. The product is one shared world with
+thousands of players moving around in it together. To carry the load, they split that world into
+shards. And a shard is a copy of the world running on its own set of servers, so the players get
+sped out. Each shard holds a few thousand people, and the world is persistent. So, you log off, but
+your character stays where you left it and it's still there tomorrow. And all of that is custom-
+built for one game, its combats, its physics, its crowded spots like cities and boss fights. This
+works when you've got one game and players who want a shared world. They all spent decades refining
+the shard approach and they all cap out at few thousand players per shard. But Roblox cannot work
+this way because Roblox isn't one game, it's a platform with millions of games on it, all of them
+made by different developers. So they follow different rules, different physics, and different
+sizes. no single shared world to engineer, so their question was never how to make their world
+bigger, it was how to run millions of different games at once without hand-building a world for each
+one. The answer they landed on 15 years ago was make each game session its own little server. So you
+and your friends open grow a garden and the platform spins up a small fresh server just for your
+group, which could be a few dozen players. It lasts only for that session and when everyone leaves,
+the server shuts down and the resources go back in the pool. So there's no shared world and no
+shards. There are just small short-lived game servers, Roblox calls them instances. There are
+hundreds of thousands of them running at any moment. Each one is a single developer's game for a
+small group of players. And that's the main decision, break the world apart so hard that the only
+thing left to solve is coordination. Normal game makes the server big and heavy, so coordination is
+easy, whereas Roblox went the other way, tiny throwaway servers and the coordination becomes the
+real product. Now, here's the rough shape, bottom to the top. At the bottom, there are physical
+servers that Roblox owns in data centers around the world. On both servers, hundreds of thousands of
+live game instances are there and each instance runs one developer's game inside a sandbox, a safety
+box that stops one game's code from touching another's. The code is written in Roblox's own language
+called Luau, which they forked from Lua. Above the instances sits the matchmaking layer which
+decides what instance you join. Above that is the platform layer, the long-term storage and services
+for accounts, inventories, friends, the economy, and everything that has to outlive a single
+session. Now, we're going to go through each of these and the hard problem that's hiding in each one
+of these layers. So, let's start with the instance. An instance is a single server process running
+one developer's game. The developer sets a player cap usually somewhere between 10 and 200. The
+instance keeps the whole game in memory, so where everyone's standing, what they're holding, the
+state of every object in the world, and it runs the physics and the game logic on a fixed tick, and
+streams the updates out to every player's screen. These instances barely live at all compared to
+normal servers. So, one spins up when a game needs more room, it runs for a single session, 20
+minutes for a quick match, a couple hours for something longer, and the last player leaves, it shuts
+down and everything it was holding is gone. At peak, there are hundreds of thousands of these
+running at once, and they don't talk to each other. Each one does its own job in its own sandbox for
+its own players. So, those 47 million players are spread across a massive number of game servers,
+and nothing up top is tracking all 47 million in one place. This smallness is what makes it work.
+Each instance runs on a slice of cheap hardware. Starting one is quick, killing one costs nothing,
+and when an instance crashes, it only takes down the 40 or 100 people inside it. They all get a
+quick reconnect and land in a new instance a few seconds later. So, the failure stays contained
+because the thing that failed was tiny to begin with, and there's nothing else hanging off it to
+break. A normal shared world game spends years on problems Roblox just doesn't have, which is
+splitting the world into pieces, moving players between them, and keeping one giant world alive
+forever. Now, the thing is, there is code running inside those instances, and this is the first
+place Roblox had to build something that didn't exist and it's a problem most problems never face.
+Now, every one of these games is written and uploaded by someone else. So, millions of developers, a
+lot of them are kids, and some of them actively trying to break things. Their code runs on Roblox's
+own servers, and it also runs on every player's device. And in both places, it's running right next
+to things it should never get access to, which is other people's data, other people's games, the
+operating system underneath it. So, Roblox needs a language where untrusted code runs at full speed,
+but physically cannot escape its box. No mainstream existing language was built for that, so they
+had to build their own. And this language is called Luau. They forked it from Lua 5.1, shipped it
+across the platform in 2019, and open-sourced it in 2021. The first thing they did was rewrite the
+interpreter from scratch in C++. Stock Lua wasn't fast enough at their scale, and the obvious fast
+option, LuaJIT, did not support the game consoles they ship on, and was hard to maintain. So, they
+rebuilt the whole runtime and got close to LuaJIT's speed without it. The harder part was the
+sandbox. Each script gets its own global table, so one script literally cannot see or change another
+script's globals. They stripped every part of the standard library that could touch the system or
+escape the box. They even removed a garbage collection hook that Lua exposes because it was bad for
+both isolation and performance. And the whole implementation is built to be memory safe, so a
+malicious script cannot use a memory bug to break out and run native code on the machine. And that
+last part is the line between a sandbox and a sandbox that holds up against people actively
+attacking it. Now, two more pieces sit on top. The first is a type system, and it works differently
+from most other type systems. So, Roblox's developers run from 9-year-olds writing their first
+script to professional studios shipping huge games. So, you can't force types on a beginner, and you
+can't leave a million-line game untyped. So, Luau's types are gradual. Add them where you want them,
+leave them off where you don't, and the compiler infers what it can on its own. They published a
+paper on this because the goals are different from a normal typed language. The second is native
+code generation, which shipped to their servers in 2024. Normally, Luau runs as bytecode inside the
+VM. With native code gen, hot scripts compile straight down to machine code that the CPU runs
+directly, and heavy numeric code gets as much as two to three times faster. And those optional type
+annotations feed the compiler, so the more you tell it about your types, the better the machine code
+it generates. The type system stopped being just a linter and became a performance tool. So, now
+let's talk about matchmaking because the matchmaker is the hardest thing to Roblox. Okay, so before
+we go any deeper, I want to take a few seconds to tell you about a cohort that I teach personally to
+15 to 20 senior engineers every few months. And it's called the AlgoRock cohort, and we cover
+advanced system design and architecture for the post-AI world. Usually, the people who attend are
+senior guys like SREs, platform engineers, principal engineers, enterprise solution architect, and
+VP engineering. There are people all the way from 5 years to 26 years of experience, and this is a
+great way to learn from actual production case studies. The next cohort will be in July, so I wanted
+to go through the website algorok.io and go through the topics that we're going to cover in this
+cohort. So, we'll cover modern systems like how Anthropic handles LLMs at scale, how Hugging Face
+handles so many sandboxes for AI models, and how Together AI hosts so many open source models at
+scale. It's a 12-weeks intensive program, and if you like the topics, I want you to fill up the form
+that opens up and hit the enroll button, not the reserve button on top. Once you do that, we'll
+check to see if you're a great fit, and we'll set up a call with you. The live cohort that's
+personally taught by me is about $2,400, and if you just want access to the pre-recorded videos,
+that's about $800. Now, if you're early in your career and beginning engineering right now, this
+cohort might not be relevant to you, so please don't fill up the form. When you tap a game, the
+matchmaking layer has a decision to make before the game even opens. It has to put you in an
+instance, either one that's already running with room for you or a brand new one. It's weighing five
+things at once. The first is latency. It wants the data center closest to you because if it puts you
+on one which is far away, the game will feel laggy. Roblox runs game servers in 24 different edge
+servers around the world for exactly this reason. Second is friends. If If friends are already
+playing, you want to land in their instance. So, it checks your friend list against the games
+already running. Third is load of the instance that passed the first two checks, which ones actually
+have space. A full one is out, and almost full one might be a bad pick, too, if your friends are
+about to join. Fourth are the developers' rules. Some games want players from the same region
+grouped together. Some want them mixed. Whatever the developer set, the matchmaker follows. And the
+fifth is new or existing. If nothing fits, it spins up a fresh instance for you, but that costs
+money, so it can't just do that for everyone. Or you'd end up with thousands of half-empty servers
+burning compute. So, all five of those in under 100 milliseconds, hundreds of times a second for a
+popular game across thousands of games at once. Now, if you actually think about it, this
+matchmaking layer is the real product. The game engine that runs developer code is also quite
+misunderstood. The hard part is placing 47 million players a weekend, each one into exactly the
+right instance of the right game in under a second. It's a real-time scheduling problem, a huge pool
+of interchangeable servers, demand that moves by the minute, and a placement that has to be right on
+all five dimensions at the same time. And the thing is, every wrong call shows up as something the
+player feels. You hit the wrong data center, there will be a lag. And you hit the wrong instance,
+and you're split from your friends, and you leave. So, the matchmaker has to get it right every
+single time, invisibly, while the load underneath it swings wide. Now, we'll also talk about the
+infrastructure, because almost every company this size runs on Amazon, Google, or Microsoft. Roblox
+mostly does not. Roblox runs more than 800,000 of their own servers in their own data centers. There
+are 24 edge data centers that run the game instances, placed close to players for latency, and there
+are two core data centers, much bigger, that run the website, the recommendation engine, the
+economy, the safety filters, which is all the central stuff the edges depend on. A private global
+network connects them, and the edge sites double as a firewall in front of the core. Now, the reason
+didn't just use a public cloud is cost and specifically network cost. Game servers push enormous
+amounts of traffic and Roblox has said that for their workload, public cloud networking would run
+them up to 10 times what their own hardware costs right now. So, after a bad outage in 2021, they
+put $400 million into a new data center in Virginia. They still use public cloud, but only to burst
+into when they run out of their own capacity. Running your own hardware usually means giving up
+everything that makes the cloud nice. Roblox did not want that. They wanted to manage physical
+machines the same way you manage cloud VMs, so they built it. They run the HashiCorp stack, Nomad to
+schedule containers onto machines, Consul for service discovery, and Vault for secrets. And they
+wrote a custom Terraform provider for something called Maas, which is metal as a service. So, a
+physical server gets provisioned with the same infrastructure as code workflow you'd use for cloud
+instance. And this resulted in their own private cloud on metal they own that mostly feels like the
+public cloud to the engineers using it. Okay, so we've looked at the instances, the language, math
+making, and the hardware. Now, we look at the data because how Roblox stores it is what lets the
+instances stay cheap. There are actually two kinds of information in a Roblox session and they get
+treated completely differently. Game state is what's happening inside the current match, like where
+you're standing, your health, the score. It matters during the session, but nobody cares about it
+after that. Platform state is everything outside the match, like your account, your inventory, your
+Robux balance, your friends, your purchases. This has to survive forever and stay consistent across
+every game you join. Now, the game state lives inside the instance and dies with it. When the
+instance shuts down, that information is gone and that's correct because nobody expects the bullet
+they fired 5 minutes ago to still exist after the match. But the platform state lives in the core
+data centers in storage built to never lose data. So, you earn a hat in one game and it gets written
+to your account. You open a different game an hour later, your inventory gets read back, and the hat
+is still there. The instance never holds your inventory, it just asks the platform layer. Now, most
+big systems try to save everything carefully everywhere because losing data is bad, but Roblox did
+the opposite. Almost everything is throwaway, and the save-it-forever effort goes into one layer
+built for exactly that. The instances stay cheap because they're not responsible for keeping
+anything. The platform layer becomes the one place that's never allowed to lose data. The general
+principle here is when some of your data has to live forever, and some of it doesn't, don't protect
+all of it the same way. Decide what has to survive, put that in one layer built to keep it safe, and
+let everything else be cheap and disposable. There's one more hard problem, and it comes straight
+from who plays Roblox. A huge share of the players are kids, and everything on the platform is
+actually made by users, like every game, every chat message, every uploaded image, and even the
+sound. So, Roblox has to moderate user-generated content at a scale almost nobody else deals with.
+Their text filter alone handles around 250,000 requests per second. And it's not a word list, it's a
+large model inference running on every message. They run more than 300 separate AI inference
+pipelines in production. A lot of the engineering here is splitting that work between GPUs and CPUs
+to keep the cost down, and they moved much of it onto their own hardware for control over latency
+and privacy. Safety at this scale is its own distributed systems problem sitting right next to the
+one that serves the games. Now, let's talk about availability because something happened with Roblox
+that made them learn this the hard way. In October 2021, the whole platform went down for 73 hours,
+a three-full days. The cause wasn't a hack or a traffic flood. They ran all their back-end services
+through a single Consul cluster, which I either think that lets services find each other. Now, they
+turned on a new Consul feature, and under their load, it caused heavy contention, which then
+triggered a massive performance bug deep in the database Consul users underneath. So, one shared
+cluster for everything meant that when it went bad, everything went bad, and the monitoring that
+would have told them that there was something wrong depended on the same systems that were down. So,
+they spent days half blind. And if that sounds familiar, it's basically the same shape as a lot of
+big outages where there's one shared dependency quietly sitting under everything. That outage
+rewired how Roblox builds everything. They stopped running everything in one big shared pool and
+started moving to what they call a cellular architecture. Here, a cell is a self-contained slice of
+infrastructure, and the idea is that a failure inside one cell stays inside that cell instead of
+taking down the entire platform. It's basically the same instinct as the game instances, just
+applied to their own back-end. Basically, you make the blast radius small by design. It's also what
+lets them burst into public cloud cleanly. At the peak, the matchmaker can place players into cloud-
+based edge cells the same way it places them into rooms on. And the system doesn't have to care
+which is which. On top of that, their traffic has a very specific shape. The peak is the weekend,
+which is predictable to the hour, but the size is not. Uh single game can go viral and double the
+whole platform in days. So, Death Rails, which is a popular game, went from nothing to a million
+concurrent players almost overnight. So, Roblox runs a tight weekly cycle, and they're public about
+it. So, review what broke on Monday, plan capacity on Tuesday, run chaos testing all week by
+deliberately killing parts of the live system to confirm that the failures stay contained, and
+provision extra servers for Friday for the weekend wave. And this whole design that we just talked
+about rests on one promise that a failure stays small. And the only way to trust that promise is to
+keep breaking things on purpose and still watch it hold. This architecture means that Roblox cannot
+give you a true single shared VEE. It puts everyone in one universe. Roblox splits players into
+separate instances on purpose. So, a game can have thousands of players overall, but never all in
+the same world at once. The scale comes at the cost of that one big shared space. And the
+matchmaking layer is now the real single point of failure. One instance dying hits 40 people. The
+matchmaker dying means nobody anywhere can start a game. All of the reliability pressure that
+instances don't carry got pushed up into that one layer. And owning your own cloud means you own
+everything that comes with it. You buy the hardware, you run the data centers, you carry the weekly
+capacity grind forever. And when something like the 2021 console failure hits, there's no provider
+to call. It's all yours to fix. They took on a huge amount of operational burden just to get the
+cost and control they wanted. So now let's look at some lessons we can take away from this. First is
+how you split the work matters more than how big you can make any one piece. The game industry
+scaled one giant world for 20 years, whereas Roblox scaled the layer that runs a million small ones.
+When you're stuck making one big thing bigger, like a database, a server, or anything, ask the
+reverse question. Can you make the unit smaller and run a lot of them? The second lesson is that if
+you run unclustered code, the sandbox is a language problem and not a wrapper that you can just add
+later. Roblox could not make other people's code safe by putting a fence around it. They had to
+control the language, the clear, and the runtime to guarantee it cannot escape. If your system runs
+code you didn't write, that boundary has to go all the way down. Third is that the cloud is a
+default, not a law. For most companies, renting is right, but Roblox's network costs were so high
+that owning the hardware was up to 10 times cheaper. So they built their own cloud and made it feel
+like a rented one. So you should know the point where the economics of your biggest cost line
+actually flip. Fourth is to make your blast radius small on purpose. The instances can contain the
+failure because they're tiny. The cells contain failure because they're isolated. Both came from the
+same idea. And the 2021 outage is what happens when you skip it and run everything through one
+shared thing. Find the one shared dependency sitting under all of your services because that's where
+your worst outage starts. Fifth, a promise about failure is worthless until you test it. Roblox's
+whole design assumes failure stay contained, so they break their own production every single day to
+prove it. If you've have killed your own servers on purpose, you don't know your system survives
+failure. You only know it survives success. Now, this is the kind of thinking we go deep on in the
+AlgoRock cohort. It's 12 weeks super intensive. We build real systems and we look at real trade-
+offs. We don't just teach you which patterns to pick, we teach you how to reason about the decisions
+companies like Roblox engineers have to make. If that's useful, check out algorock.io. The link is
+in the description. Okay, now let's wrap this up. Roblox's whole scale story comes down to one
+decision. Make the single game session the smallest unit of work and pour all the engineering into
+everything that coordinates millions of them. And every hard problem we covered hangs off that,
+which is a language they had to invent to run untrusted code safely and fast, a match maker that
+places players in real time across 24 data centers, their own cloud on their own metal because the
+network math demanded it. And the biggest lesson here is the same one that Kubernetes and serverless
+are built on, which is the platforms that hit numbers nobody else can touch usually got there by
+shrinking the unit of work until they could run an unlimited number of copies. So, the next time
+you're stuck on a scaling problem and the only move looks like making one thing bigger, stop and
+look for the version where you make it small and run a lot of them instead. Now, making these deep
+dive videos and these diagrams takes a lot of work, so please don't forget to subscribe to this
+channel, like this video, and share this with your friends, and I'll see you in the next video.

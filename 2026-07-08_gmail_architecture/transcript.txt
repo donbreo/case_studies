@@ -1,0 +1,336 @@
+When Google announced Gmail on April 1, 2004, with 1 GB of free space for every user, effectively
+500 times more than Hotmail was providing at the time, the entire industry thought it was an April
+Fool's joke. But that's not true. Keep every email forever, never force the user to delete anything
+or sort anything into a folder, and let them find any message from years ago by typing a search and
+it will come back instantly. Now do that for 1.8 billion people, store it in a database that has
+grown to several exabytes, which is billions of gigabytes, and never lose a single byte, and never
+let anyone's two devices display different versions of their mailbox. And that 's the promise behind
+Gmail. The first version of Gmail was built by a single engineer in a single day, pointing the
+Google Groups search code at a mailbox, not a newsgroup. And this origin is the key to everything
+that is given here. Gmail is not email with search tacked on top of it. This is actually a search
+directed at your email. And this one choice presents you with three of the most difficult problems
+in distributed systems at once. The first is storage, which is constantly growing only to exabytes.
+The second is a new private search index for each user, which is constantly updated in real time.
+And the third is a mailbox that behaves like an active database, containing state that can never be
+lost and will never be inconsistent. And this video shows how Google actually creates all of this .
+And all the information here is taken from their own engineering articles about Spanner and their
+storage systems. I have compiled all publicly available information into these charts. And this
+video is going to be very visual, so stay tuned , because at the end I'll also mention some lessons
+that you can take away for your own systems and build better software. Gmail now becomes much easier
+to understand when you realize that storing Gmail isn't the hard part. Storing text is easy. And
+modern systems can store petabytes of documents, images, and videos without much trouble. The
+complexity of email comes from something else entirely, and that is state. Every email actually
+contains a surprising amount of data related to its state , namely: is it read or unread, starred,
+archived, what labels does it belong to, what thread of the conversation does it belong to, or is it
+a draft that is still being edited? And none of these properties are part of the content of the
+emails. However, users expect them to work flawlessly. Now think about what happens when you simply
+open the message. The unread flag changes, and this is a write operation. Star a message and move it
+to a label, archive it, or save it as a draft, and you generate even more leads. Now imagine doing
+this on your laptop, phone, tablet, and web browser, all logged into the same account. The challenge
+now is not to save those emails. The challenge is to ensure that every device sees the same reality
+at the same time . So if you mark a message as read on your phone, your laptop won't be able to
+continue to show it as unread. And if you save a draft on one device, it won't disappear on another.
+And if you archive a conversation, that change should be reflected everywhere. Nowadays, users
+rarely think about these requirements, but they immediately notice them when they don't work . At
+this point, the mental model of a folder full of files completely breaks down because the files are
+passive and the email is active. Each message is constantly queried , indexed, updated,
+synchronized, and linked to other messages using labels and conversation threads. Gmail doesn't
+actually manage a collection of documents , but a massive distributed automaton representing the
+mailboxes of billions of users. And that's why email storage ultimately becomes a database problem,
+because every message is a record, and every action is a transaction, and every device is
+simultaneously reading and writing state . And unlike many apps, Gmail operates with two limitations
+that are virtually non- negotiable. Firstly , it is durability. Losing someone's email is one of the
+worst failures an email provider can have , and users may forgive a slow mailbox, but they won't
+forgive data loss. Secondly, it is consistency. You can't let two devices disagree on whether a
+message exists, whether it's been read, or what its state is. The entire experience depends on each
+client adhering to the same truth. Now remember these two requirements: durability and consistency,
+and almost every major architectural decision in Gmail stems from Google's refusal to compromise on
+either of these two requirements. But hidden within this long list of email states is another design
+decision that turns out to be no less important, and it is one that many engineers can directly
+borrow from their own systems. Gmail's next major design decision looks like a UI feature , but it's
+actually a database design choice. Traditional email systems organize messages into folders. A
+folder is essentially a hierarchy. Each message belongs in exactly one place, so if you wanted the
+same email to appear in multiple folders, the system had to either create copies or maintain complex
+distinctions between them. Both approaches introduce additional complexity . Now took a different
+path and introduced labels instead of folders. A tag is simply metadata added to a message. The same
+email can be simultaneously marked as work, important, receipts, and travel, while still existing as
+a separate record in the repository. This way, it will not have any duplication and will not have
+any synchronization between copies. There will be only one message, and there will be many ways to
+classify it. From a data modeling perspective, this is a significant shift, as the system moves from
+a rigid tree structure to a flexible many-to-many relationship between messages and labels, and this
+change has an interesting consequence. When you archive an email in Gmail, nothing is actually
+moved. There is no archive folder waiting somewhere else on the system. The message remains exactly
+where it was before. Gmail simply removes the inbox label . The same message still exists. It still
+belongs to the same conversation thread. Still showing up in search results. It simply no longer
+meets the condition required to appear in your inbox . In fact, your Inbox is n't really a folder at
+all. This is just a request. For example, the query would look like this: Show for each message that
+currently has the Inbox label. A custom label is actually a query, and every screen you see in Gmail
+is just another question asked of the same basic collection of messages. And this is Gmail's "search
+first" philosophy, expressed directly in the data model. Messages are stored once, metadata
+describes them, and different representations arise by querying this metadata. This is a great
+design because it separates storage from organization, and messages don't need to be moved around
+the system to appear in different places. The system only needs to quickly answer questions about
+them. And this last requirement turns out to be critical, because once every inbox label chain and
+search result is generated by querying the same underlying data set, the performance and correctness
+of those queries become central to the entire user experience. Which brings us to the two guarantees
+that every large-scale email system should provide : durability and consistency. Durability means
+one thing: once a message is received, it is never lost. Once Gmail notifies the sender that a
+message has been delivered, that message has to survive whatever happens next. It could be a failed
+drive, a machine catching fire, an entire data center losing power, and none of that is really
+allowed to cause you to lose your email. On the scale of Gmail, this is not hypothetical. With
+millions of disks in operation, some fail every hour of every day . So, a single copy of an email
+residing on a single drive or even in a single building is not durable in any sense. And the
+mechanism of longevity is replication. The idea of ​​replication is simple. Instead of storing an
+email on a single machine, the system stores multiple copies on different machines, and if one
+machine fails, the other copy still exists. At first glance, this sounds like a complete solution
+that involves simply making enough copies and you're safe, but replication raises questions. When do
+you consider the right to receive complete? Imagine an incoming email is delivered to one machine
+and the system immediately responds successfully and starts creating additional copies after that in
+the background. Technically, the design uses replication, but there is a dangerous gap. For a brief
+moment, only one copy of an email exists, and if that machine fails before replicas are created, the
+email effectively disappears, even if the sender has already been notified that it is safely stored.
+What matters is whether these replicas exist before or after the system confirms the right to
+receive. A strong system changes this order. An incoming email is not considered written until it
+has been transmitted to multiple machines, ideally in different physical locations. Only then is its
+receipt confirmed, and you pay for it with a slight delay as you wait for confirmation from several
+places before agreeing. And then any single machine or an entire site can disappear without losing a
+single byte, because other copies are still stored. And this single rule is the foundation of the
+entire promise of no data loss. A right is never recognized until it is safely stored in several
+places. But durability creates a new problem. The new problem is that the same email now exists in
+multiple copies in multiple places, and you read your email simultaneously from your phone, laptop,
+and browser. They all have to agree on the truth. So, you open a message on your phone, it's read,
+and you turn on your laptop 2 seconds later, and it should already show that message as read. You
+apply a label on your desktop and your phone should already reflect that. And two records arriving
+at the same time cannot collide and leave the state jumbled. So this is a consistency problem, and
+it's one of the really difficult problems in distributed systems. Copies of your data are on
+separate machines that are coordinated over a network, and that network is slow and unreliable
+compared to the speed at which you click. Many systems solve this by agreeing on a final version,
+and they allow the copies to diverge briefly and promise that they will convert soon. For many apps,
+this is actually a pretty reasonable deal, but for email, it's a bad deal, because imagine deleting
+a message on your phone and watching it reappear on your laptop within 30 seconds. People expect a
+mailbox to behave as a single entity, not as multiple copies that negotiate. So, Gmail requires
+strong consistency or marking your inbox as read and watching the unread count flicker again. And
+every device and every location always sees one consistent version of reality. And for a long time,
+the conventional wisdom was that you couldn't have everything at once, like strong coherence, global
+distribution, and massive scale all at the same time. You had to choose only two of them. And this
+limitation is exactly what Google aimed to destroy. The system that broke it is called Spanner.
+Google's own engineering articles confirm that Gmail runs on it, storing the exabytes of data we
+described. Spanner is a globally distributed database that is also strictly consistent, supports
+complete transactions, and provides real-time asset guarantees where a set of changes either occur
+completely or none of them occur without half-finished states in between. And this combination is
+the interesting part. Typically, these strict transactional guarantees come from only a single
+machine database, which cannot scale. But at the moment of data distribution, you are expected to no
+longer have transactional guarantees. But Spanner somehow keeps them. You can distribute data across
+machines and continents, add capacity almost without limit, and still treat it as one coherent,
+strictly consistent database, where transactions behave correctly , and every reader sees the same
+truth. As for Gmail, it's close to ideal, because an inbox is a small package of states that should
+never be lost and should never contradict itself, multiplied by over a billion users. The mapping is
+clean and durable because Spanner replicates data in different locations and refuses to acknowledge
+a claim until enough copies hold it . And it's consistent because Spanner provides a single global
+order for all operations, and scalable because it was designed from the start to be distributed
+across as many machines as needed, which leaves one question, and it's complicated. How do you
+maintain a single, consistent order of events across machines that are thousands of miles apart and
+can only communicate over a slow network? Now the answer comes from an unexpected place–from
+watches. Now here's the main difficulty. To place all the world's operations in the same order, the
+obvious approach is to timestamp each one and sort by time. But computer clocks cannot be trusted
+with this . Each machine's clock is slightly off, and they diverge from each other by milliseconds,
+and on a global scale, these small discrepancies are enough to change the order of events and
+disrupt coherence. So, using only timestamps does not work in a distributed system . This is why
+global strong coherence was considered impractical, but Google's answer was to stop treating clocks
+as unreliable and instead turn time into a reliable service. They installed atomic clocks and GPS
+receivers in each data center and created a service based on this equipment called TrueTime.
+TrueTime does one unusual thing. Instead of claiming to know the exact current time, it is honest
+about its own uncertainty and returns an interval. True time is somewhere between this value and
+that value, and it keeps that interval very small, just a few milliseconds, relying on the precise
+hardware down below. Now that your clock knows how wrong it can be, you can use that to ensure
+order. When Spanner commits a transaction, it assigns a timestamp and then intentionally waits. It
+pauses for the duration of the uncertainty interval before making the result visible. This pause is
+called the fixation wait . The effect is accurate. By the time someone can observe a transaction,
+its timestamp is guaranteed to be in the past everywhere on Earth. So, if one transaction completes
+before another begins, the timestamps correctly reflect that order on each machine without a central
+coordinator to arbitrate it. This is how the same mailbox, replicated in different countries,
+remains in perfect consistency. Before we dive in, I want to take a few seconds to tell you about a
+cohort that I host every few months, and it's called the Algo Rock cohort. We look at the advanced
+architecture of system design for the post- AI world, and it's usually senior people like SREs,
+platform engineers, principal engineers, enterprise and solution architects, and we interviewed the
+guys. So, there are people with experience ranging from 5 to 26 years, and it's a great way to learn
+from real-world case studies. Now you can go to the algorock.io website, which is algorock.io, and
+look at the topics that we're going to cover in this cohort. Now we'll look at modern systems, such
+as how Anthropic handles AI models and how Hugging Face handles so many AI model sandboxes together.
+AI hosts so many open source models at large scale. This is a 12- week program. Each session is a 4-
+hour deep dive. Now, if you like the themes, I want you to fill out the form that opens when you
+click the "Reserve" or " Register" button at the top of the website. After you fill out the form, we
+will check if you are a good fit and then arrange a call with you . The cost for a live group that I
+personally teach is around $2,400, but there is a huge waiting list because I can only take a few
+people. But if you just want access to pre-recorded sessions, you can get immediate access for just
+$800. Now, if you are early in your career and starting out in engineering , this group may not be
+of interest to you. So please do not fill out the form. Okay, now let's get back to the video. A
+reliable and consistent global database is the foundation, but you still need to decide how to
+distribute exabytes of data across all those machines. And email has an extremely clear response.
+The natural unit is the user, and your entire mailbox, messages, labels, reading states, index are a
+self-contained package that is almost always only touched by you. So, Gmail is partitioned by user,
+and each mailbox is a shard, and the shards are distributed across the entire server fleet. As we
+saw in the video about designing the Instagram system, the mailbox is not tied to a specific
+computer. A logical mailbox is separate from the physical location where it resides. Therefore,
+mailboxes can be freely moved between computers as they grow and new hardware is added. The most
+difficult request on Instagram was a feed request: " Show me posts from 200 people I follow." These
+publications are scattered across 200 different shards. So one request should cover the entire
+server fleet. Whereas email mostly avoids this. A request for your own mailbox hits the single shard
+that contains it, and everything it needs is there together. Email is naturally user-generated in a
+way that a social media feed never is, because your inbox doesn't need to be populated with other
+people's data. The hardest part of working with email has never been collecting it from so many
+places. The hardest part was the search. And search is the center of the product, and it's a
+different problem than web search, which we looked at in the video about Google search. When Google
+searches the web , there is essentially one huge index of all public pages, and everyone on Earth
+queries this shared index. So , this is one index that billions of users point to. Gmail is actually
+the opposite. Your email is private, so only you can search your own messages, and I can only search
+mine , and the two indexes can never mix. So, Gmail can't create one shared index for everyone's
+email. It has to maintain a separate private search index for each user, and that's almost 2 billion
+separate indexes, isolated from each other, each covering the entire history of any one person that
+has never been deleted. The scale here is the opposite of web search. Web search is complex because
+a single index is huge, but Gmail search is complex because there are almost 2 billion different
+indexes. Each is isolated from the other to ensure privacy, and each is tied to an email array that
+is only growing. Increasing search volume per user does not reduce the problem. In a way, it makes
+it harder for her. Instead of focusing all your efforts on making one index perfect, you have to
+make over a billion work at the same time and do it cheaply. And there is another requirement that
+makes it even more difficult. And this is a requirement that web search can miss. And this
+requirement is freshness. When Google indexes the web , it is allowed to lag. A page published 5
+minutes ago may not yet be searchable, and almost no one notices it. But email can't behave like
+that. If a message arrives in your inbox right now and you're looking for it immediately, it should
+be there. Not in 5 minutes, not after a nightly batch job. So it's important to include a message
+that arrived while you were still typing the query, and Gmail can't index in slow, lazy batches. And
+as soon as a new email arrives, that user's personal index must be updated before it can start
+searching. And this happens continuously in 1.8 billion mailboxes against the backdrop of a constant
+stream of incoming emails. So this is real-time indexing for every user on a planetary scale, and
+it's significantly more complex than maintaining one large, mostly static, index. So the search
+model initially only works because the index is always up to date. If the index lags behind the
+mailbox by even a few seconds, the entire process begins to break down. So, a user will be looking
+for an email that they know just arrived, but still can't find it, which raises the question of
+maintenance: how do you maintain all of this, the storage state, the index, fast enough that opening
+your inbox feels instantaneous ? The answer is to stop treating all data as the same. And it's a
+solution that makes serving exabytes fast, and it extends far beyond email. Now, not all email data
+is used equally. There is a small hot part, such as subject, sender, labels, read mark, search
+branch position, search index entries, and there is a large cold part, which includes the full body
+of the message and especially attachments, i.e. a 10MB PDF, images, videos. These two data types
+have completely different access schemes. To display your Inbox, show the number of unread messages,
+perform a search, or list conversations, Gmail constantly needs a little hot metadata, and it needs
+it fast. It almost never requires large attachments until you click on one specific message. They
+are stored separately. Small amounts of hot metadata are stored in a fast, expensive, highly
+consistent database where it can be processed in milliseconds, while large amounts of cold data and
+attachments are moved to cheaper, denser mass storage designed to hold huge amounts of rarely used
+data. This is the same principle as the Dropbox video gap. So you choose storage based on how the
+data is actually used, instead of paying premium prices to keep video embedding from 2012 at your
+fastest level. It is thanks to this compliance that the system is fast and at the same time
+accessible. Now let's look at what happens when you actually open Gmail. Gmail doesn't read tens of
+thousands of saved emails from disk and collect them. Instead, it queries the database for your hot
+metadata, which is the latest fragment of your mailbox, labels, unread states, stream structure. So
+it's small and quick to retrieve, and Gmail builds the look of your inbox around it. Now your
+mailbox is just a request again. Everything is labeled as incoming messages, and the newest ones are
+shown first. And the asset of this request is the metadata, not the message bodies. So the heavy
+content remains "lazy ", and the full body and attachments of the message are not received until you
+actually open that message. And at that point, Gmail gets that one body from cheaper mass storage,
+and the mailboxes that people are actively using are cached close to the service level . So, the hot
+path you take dozens of times a day , like checking your inbox, goes into fast memory, not cold
+storage. And that's why the " open my mailbox" function feels instantaneous, even if you've been
+storing your entire life's worth of emails inside a multi-exabyte system. And the system almost
+never touches most of that email. It touches a small hot cached chunk of metadata and leaves the
+huge cold storage untouched until you access one specific chunk. Reading email is relatively easy.
+Receiving email is where interesting problems arise. Whenever someone sends you a message, Gmail
+should make it available worldwide almost instantly, without risking data loss. The message arrives
+via SMTP from another mail server, and before Gmail can acknowledge it, a few things need to happen.
+The email must be written to be durable and reproducible, spam and security checks must be
+performed, filters and labels must be applied, the search index must be updated , and the message
+must be delivered to your devices in real time. Durability is not the only problem with email
+delivery . Networks are constantly failing and the Internet is unreliable, which means retries are
+inevitable. Therefore, the sender's server is designed to retry if it does not receive a clear
+acknowledgement. Now let's consider the case of failure. Gmail successfully receives and stores the
+email, but the confirmation to the sender is lost in transit. From the sender's perspective,
+delivery failed, so he does the right thing and sends the entire message again. But without
+protection, you now have two identical copies in your mailbox, and at this scale, this will happen
+all the time. The protection against this lies in the effectiveness of the element. Delivery is
+designed so that processing the same message twice has the same result as processing it once. Now,
+each message contains identifiers that allow Gmail to recognize that message and determine whether
+it has already been saved. This way, the retry is silently absorbed, instead of creating a
+duplicate. Now there's another trick that makes email storage at the scale of Gmail economically
+feasible. Imagine a company-wide announcement with a 5MB PDF sent to 10,000 employees, or a
+newsletter delivered to millions of subscribers. Now, from the user's perspective, each recipient
+has their own copy of the email, but physically storing identical attachments would be extremely
+wasteful, and the same bytes would be written to disk over and over again, even if the content never
+changes. So, instead, Gmail relies heavily on deduplication. Now, when identical content appears
+multiple times, the system can recognize that the underlying data is the same and store it only
+once. And each mailbox still sees its own email, but beneath the surface they all link to a shared
+physical copy. Conceptually, this is similar to the fingerprint technique we saw in the WhatsApp
+video. The system calculates a content fingerprint and uses it to identify data it has already
+stored. And if two pieces of content create the same footprint, there's no reason to keep two
+separate copies. So, the result is impressive. A large attachment sent to 10,000 people doesn't
+necessarily consume 10,000 times more space. Millions of recipients can often use the same base
+bytes. Now, this optimization also explains a behavior that many users find very strange, namely
+that deleting a large email from your mailbox does not always reduce storage usage as much as one
+might expect, as the attachment may still be referenced elsewhere. This way, the underlying data
+remains active, and only when the last link disappears can the storage actually be returned. And on
+the scale of Gmail, this is no small optimization . This is a necessity. When your goal is to retain
+data indefinitely, eliminating redundant copies where possible is one of the few ways to control the
+retention curve. Now let's move on to data centers, because durability and consistency need to be
+present even when an entire building disappears. Your mailbox isn't just in one place. Its copies
+are located in multiple data centers, often in different regions. And among these copies, one acts
+as a leader that coordinates rights, while the others remain synchronized with it. A right is not
+considered exhausted until a sufficient number of copies agree on it, which again ensures that
+nothing is lost and everyone sees one unchanging truth. Now let's assume that the data center
+actually fails. This could be a power outage, network outage, or damage to a fiber optic line during
+construction. Now the mailboxes he maintained will not fail with him. The system goes into failover
+mode, but another data center that already has an up-to-date copy takes over as the leader, and the
+service continues to operate without data loss because the remaining copies were synchronized before
+any entitlement was recognized. But there is a certain contradiction here. When a network is divided
+and machines cannot communicate, a distributed system must choose between remaining available and
+remaining consistent. She can't completely have both at this point, and that's the CAP theorem, and
+you can read more about it if you don't know how it works. In this case, Gmail leans towards
+consistency. It would rather leave a small number of mailboxes temporarily unavailable than send you
+a version of your mail that is incorrect or appears to be missing some messages. And for email, it's
+the right choice. The few seconds when Gmail tells you to try again is a minor annoyance, not a big
+deal. But a mailbox that simply dumps messages is not something users will forgive. Now let's talk
+about trade-offs, because as senior engineers we can't afford to miss out on trade-offs. We know
+that Gmail has taken the opposite path than WhatsApp, and is actually paying a different price for
+it . WhatsApp decided to store almost nothing, and the reward was a small, cheap, and simple server.
+Gmail decided to store everything and never force you to organize any of it . And the price of this
+choice is real and constant. So, having promised users that you don't have to delete your emails,
+the mountain of data continues to grow every day, and Gmail pays to store a fifth of the planet's
+email over its entire lifetime, most of which, no, will never be opened again. Now, deduplication
+and cold storage soften the numbers, but they don't change the direction of the curve. Second,
+strong coherence is not free, it costs delay. So , each right must be coordinated between multiple
+replicas before it can be considered complete, and these replicas can be separated by hundreds of
+thousands of kilometers, meaning that each operation introduces real network delays. And WhatsApp's
+servers, which don't store anything, can be fast and careless precisely because they promise to
+remember nothing, while Gmail has to be careful, and caution costs many good seconds. And third,
+complexity lives with Gmail all the time. So, it has exabytes of data, as well as a global database,
+atomic clocks, real- time indexes for each user, and a failover mechanism . So in the case of
+WhatsApp, WhatsApp moved complexity outward to a billion phones to simplify its own servers, while
+Gmail moved complexity inward to its own infrastructure to simplify the lives of its users. Neither
+option is correct, they are simply two different answers to the same question: where should the
+complex part be located ? And each company chose the one that lived up to the promise it made. So,
+there are five things to take away from this. First, a product decision is often an architectural
+decision in disguise. Never delete, just search. Sounds like a great user experience, but it
+requires exabytes of storage, real- time indexing for each user, and a globally consistent database.
+Second, decide in advance whether you keep everything or nothing . Gmail and WhatsApp are two pure
+extremes, and almost everything you create falls somewhere in between . Third, choose your storage
+according to how the data is actually used. The gap between small hot data and big cold data is the
+single biggest reason why Gmail is both fast and accessible. Fourth, high consistency is worth
+paying for when making mistakes is unforgivable. Gmail has accepted the delay and reworked the time
+itself because a mailbox that disagrees with itself is unacceptable. Fifth, and most importantly,
+these are boring guarantees. It doesn't surprise anyone that their email wasn't lost or that their
+unread count is correct. Users rarely notice reliability when it works. They notice her immediately
+when she's not working. And it is precisely these considerations that we are working on in the
+AlgoRock cohort. So that's 12 weeks, real production systems, real trade-offs, and actual decisions
+that underlie systems like this. If this sounds useful, take a look at algorock.io, which is
+algo.io, and the link is in the description. Now let's summarize. The deeper lesson here goes far
+beyond email, and it is that every large-scale system must decide what it values ​​most, because
+every guarantee comes at a price. WhatsApp is optimized for simplicity, keeping very little state
+data on its servers, while Gmail, and we saw in this video, is optimized for persistence,
+searchability, and consistency, and then built the massive infrastructure needed to implement those
+guarantees. And we learned that none of these approaches is inherently better . It's important to
+understand the promise your product makes to its users and build the systems necessary to scale
+them. So the next time you send an email and it instantly appears on every device and remains
+searchable for years and never disappears, it's worth remembering the complexity that lies at the
+heart of it. One of the most advanced storage and sync platforms ever created actually holds it all.
+These deep dives require a lot of work, time, and effort, and I do them after my full-time job. So
+if this was helpful, please subscribe, like, and share this video with your friends, and I'll see
+you in the next video.

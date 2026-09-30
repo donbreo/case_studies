@@ -1,0 +1,588 @@
+So, it's summer of 2000 and PayPal is losing more
+than $10 million a month. And it's not going to salaries or marketing or even to servers. It's
+actually going straight to fraud. And back then, it was actually worse than what this number
+sounds because their fraud rate had crossed 1% of everything moving through the platform. And
+once you're above 1%, Visa and Mastercard start threatening to cut you off from their networks
+entirely, which for a payments company like PayPal, it's a death sentence. And there was one
+guy, a Russian hacker, who went by the name of Igor, who was personally emailing Max Levchin,
+who's PayPal's CTO, and used to send emails to the CTO just to mess with him. And once he sent an
+email saying, "I created 20,000 accounts today." So Levchin, the CTO, and another engineer named
+David Gosbeck logged themselves in for 2 days. And this was a 2day straight coding marathon, and
+they shipped something that no other commercial website had ever used before. And it was a signup
+page that makes you read a bunch of distorted squiggly letters and type them back in. And
+that's the first commercial version of capture, which is the thing that you've done a thousand
+times in your life already. And it exists because of this. And the night that the first version
+of capture went live, new account creation on PayPal dropped by 50%. Because half of the
+accounts were anyways being created by bots. Then they built a system that scanned the whole
+network for suspicious patterns and flagged them for human investigators and it was named after
+the main hacker who was troubling them. Now if you've used any payment apps recently like
+Stripe, PayPal, there's a technique that the bank still uses to verify your account which is by
+making two small deposits in your account and even that came from this war between the fraudsters and
+PayPal. So all of this was 26 years ago and that was version one of the system built for one reason
+which was to keep the company alive. Now, let's jump to today because today PayPal moves $1.8
+trillion a year. And that's 25 billion payments across 439 million accounts in 200 markets, which
+works out to roughly 800 payments every second on an average day. And on a Black Friday peak, it's
+way more than that. Now, every single one of those payments gets judged. For example, PayPal checks
+whether this is the real account owner or whether this card is stolen or does the seller actually
+ship anything. And this entire judgment with all of these signals gets a budget of about 100
+milliseconds only because at checkout latency can kill conversions and people will start abandoning
+their carts. So this system has to be right 800 times a second against an opponent which is
+actively studying it and adapting to it. And the opponent I'm talking about are very sophisticated
+hackers/fraudsters. And this entire machine, the complete PayPal fraud detection system,
+how it's built, why it's built the way it is, all of this is what we're going to look at in
+today's deep dive video. So, in this video, as you know by now, we're doing a deep dive into
+the architecture of the fraud detection models at PayPal. And this video is super important for
+software engineers, ML engineers, architects, engineering leaders, SRE, platform infront
+engineers, basically anyone who's running a system where being wrong will cost actual money.
+Everything that we look at comes from published material like PayPal's own engineering blog and
+their open- source work and talks from their risk and AI teams. Nvidia's published case study on the
+model serving and for the early history I referred the books the PayPal wars and the founders. These
+are two really interesting books. Now I had a 3D artist to break all of these concepts down into
+these nice 3D scenes so that you don't get bored with engineering diagrams. Now, just to let you
+know, I'm streaming all of this in 4K. So, if some of the text is too small, you can just watch
+on a bigger screen. And also, all of the visual resources like these diagrams are available for
+free on my website. The link is in the description of this video. You can just open this file up
+and view it alongside the video. Now, just to keep things structured, we're going to go through
+seven different things. The first thing we look at is what actually happens when you tap pay on
+PayPal and the money actually moving. The second thing we look at is why there are not one but five
+different fraud checks and the strictest check of them all is not the one at payment but it's the
+one at withdrawal and we will discuss why in this video. The third thing we'll look at is how do
+they track down the fraud signals the strongest fraud signals and why PayPal had to write its own
+database just to serve them. The fourth thing is that we'll understand the fraud business itself
+like it's a business with a supply problem and how understanding the fraud business can help
+you catch more fraud. Fifth and this is one of the most interesting sections of this video.
+We'll look at four different generations of fraud detection models and we'll also look at how the
+newer models stop fitting inside a 100 millconds window and what PayPal does about it. Now, now
+the sixth part which is something that nobody talks about which is that if a system like a fraud
+detection system blocks some of the signals and some of the transactions then it doesn't really
+have a data set to actually in from. So how do you fix that problem? And seventh we look at the
+number that decides whether your payment will go through or not and this is not chosen by the data
+science team. So as you can see we have a lot of interesting stuff to cover in this video. So I
+suggest not bailing out and actually watching the entire video so that you completely understand
+how fraud detection works. Now before we look at the architecture, there is one thing about this
+problem that makes it different from any other problem or project you might have worked on in
+the past and if I skip it then none of the design decisions later on in this video will make any
+sense to you. So this is why I want to talk about it right now. So let's get started. Now let's
+say you build a model that forecasts electricity demand over time. Now let's say you deploy this
+model in production and everything carries on as usual. The important thing here is that the
+electricity grid does not read the forecast from your model and then behave differently. Now,
+I know that sounds extremely weird, but please stay with me. I'll explain what I'm trying to say.
+What I'm trying to say here is that the model that you trained on was trained on some patterns that
+existed in the past like let's say a few months back. But now there are new patterns to be seen on
+the electricity grid. So the demand patterns keep changing over time and this is why the model's
+quality or the model's predictions they become worse over time. So the model drifts slowly and
+it's not because of the data that we use was wrong or not because of we lacked any special techniques
+to train the model. It's only because the model is decoupled from behavior because the actual data
+and patterns are changing continuously whereas your model was built on how the patterns existed
+in the past. So the way to think about this from first principles and I'm reiterating here is
+that the model is usually decoupled from the actual behavior of the grid because the model was
+trained with data in the past. But fraud doesn't work like that. This is a different problem. In
+fraud the patterns change because you deployed the model. It sounds very very weird. Now why this
+happens is because the moment you start blocking something like transactions or fraud, the people
+running the fraud ring see that their success rate is actually dropping. So essentially someone
+who's running a digital fraud is actually quite savvy and they're watching their own numbers on
+their own dashboards in real time. So they change what they're doing and they change it in days or
+sometimes even hours depending on how savvy they are. Which means you're not modeling a world. Now
+a model is basically a model of a world, right? like in the sense with some variables defined
+and set. But in this case, like I mentioned, you're not modeling a world. You're playing
+against someone who's retraining against you and their cycle is faster than yours. So this opponent
+of yours who is the fraud ring operator actually shows up in three different ways. First is the
+stolen cards, which is someone using a card number that belongs to a real person who hasn't noticed
+yet. Then there's something called as account takeover which is someone getting into a real
+PayPal account either by fishing the credentials or buying them in bulk off a marketplace. And
+then there are fake actors. These are fake buyers, fake sellers and sometimes both sides of the same
+transaction is run by the same fraud ring. So they're basically pushing stolen money through a
+shop that never ships anything. And this third one is the reason PayPal's job is actually harder than
+most other companies because PayPal is a two-sided network. So on every payment, it has to form an
+opinion about the buyer and an opinion about the seller. Most fraud teams in the world only ever
+have one side to worry about, not both the sides. So PayPal's job, like I said, is much harder.
+So we learned about the opponent in the previous section, but there is also a time problem. Now
+when you pay tap PayPal, the whole round trip from your phone to PayPal to whatever is funding
+the payment like your bank or card and then coming back has about a second or two before the checkout
+starts feeling broken and you wand it off. So I've actually shown the animation here. So this is your
+device which is running PayPal. You clicked pay and then the funding instrument which is where
+the money moves like the bank or something and then coming back to you. So this has to be done in
+a short window of time. But sometimes when things don't happen the way they have to then check out
+feels broken and carts get abandoned. Now the problem is you have a small time window for this
+entire round trip but most of this gets eaten up by network hops and also a lot of the time gets
+eaten up by the actual money movement and nobody can really speed up the network hops and this
+money movement process much. So the fraud decision section which is just this part gets whatever is
+left from the entire time budget provided to us and this part just gets a 100 milliseconds. That's
+it to decide whether this is a fraud transaction or a legit transaction. Now to understand what's
+happening in this and to zoom into this what I've done is I've actually drawn all of the process
+here that happens. So let's go through that. Now inside this the system runs something that looks
+a lot like a trial. It collects the evidence which is hundreds to thousands of signals about the
+device, the account, the card, the seller and the history between all of them. So here you can
+see all the signals and the data being collected about the device, the card, the account, the
+seller and all of the history and it goes here. So this is the evidence hundreds of thousands of
+signals and then it has to return one of exactly three answers. The first answer is a proof where
+the money moves and you never find out any of this happened. The second is decline. The payment
+actually dies here. But the third one is the one that's the interesting one. It's called a step
+up and it's what the system does when it genuinely cannot tell if the transaction is legit or fraud.
+So instead of guessing, the system asks for more proof. The proof could be a one-time code to the
+phone number on the account or a three secured check with your bank. And the reason this works
+so well is that the cost lands almost entirely on the wrong person. For you, it's 5 seconds of mild
+annoyance, but for someone using your stolen card, it's the end of the job for them because they
+have your card number, but they don't have your phone for the OTP or the secure 3D code. Now,
+I know I said that this happens at the payment, and that's true, but it's not the only place
+that this happens at. Risk decisions run at five different separate checkpoints, and each
+one is asking a different question about you. So, the first checkpoint is the signup. The question
+here is just whether there's a human on the other end or not. So fake identities either get stopped
+here or they never get stopped at all. The second checkpoint is the login. Now the question here
+is whether this is the same human who owns the account or some different human. So account
+takeover gets caught here. And all of this is before any money has moved. The third one is
+when you add a card and this is where card testing shows up. So, look at it from the fraudster side.
+They've bought a list of 4,000 stolen cards for a few hundred, and most of the card numbers are
+already dead, cancelled, or even junk to begin with. So, they have no way of knowing which ones
+will still work. So, what these card testers who have stolen thousands of stolen card information
+from a bulk source, what they do is they push a tiny transaction through each of the cards that
+they have. Here in this animation, you can see about 10 cents being charged to each card, but
+it could be around a dollar or two as well, just to see which card comes back approved. For
+these fraudsters, this is basically inventory checking. They're checking which of their cards
+actually work. So, this is boring admin work for them. But for PayPal, it's extremely loud because
+it has a lot of signals attached to it because what they see is just one device running dozens of
+different cards at small amounts, but very fast. The fourth gate is the payment itself and in
+the previous section we saw this trial that's actually happening at this stage. So this entire
+thing that we saw this entire process is actually happening at this fourth gate. So I hope now these
+visualizations help put things into perspective that there's a lot of checking going on for every
+single transaction. And the fifth checkpoint is withdrawal when you actually withdraw the money to
+your bank. And this is the one with the thickest defense. And the reason is important because
+a fraudster can fake an email address and they can even fake a device. They can fake a name. They
+can even absolutely fake a card but at some point the money has to leave the system and land in
+a real bank account belonging to a real person with real documents. And that's the one part
+of the operation they cannot manufacture which is why mule accounts which are the accounts that
+sit there receiving stolen money and passing it on get more scrutiny than anything else on the
+platform. Now these five gates that we talked about the five different checkpoints they are
+actually like a funnel if you think about it. So think about this as an assembly line. The further
+a fake account gets through the system means that if our system is not able to catch it at these
+different checkpoints and the further it gets the more infrastructure the more compute the more
+analyst time and model decisions gets spent on it. So let's visualize with the help of this diagram.
+These are the various gates we have talked about and we've been discussing all this while. And
+the more gates you cross as a fake account, you can see this fake account, the bot that's moving
+across. The later you catch it, the more resources have been spent on it already. Because if you
+stop it right here itself at signup, the entire downstream pipeline disappears because you don't
+have to then catch it here in other stages. And that's why the cheapest fraud to stop is the fraud
+that never gets an account in the first place. That means you stop it at signup itself. So just
+to summarize from a first principal perspective, you have to stop the fraud as early as possible.
+The later it gets caught, the more resources you have already spent on it. I hope that's clear.
+Okay. Now let's do a quick walk through across all the stages of a decision that the fraud
+detection system at PayPal has to take because once we go through this, we'll also get a road map
+for the rest of this video. So let's say an event arrives. It could be a login event, a payment
+event or a withdrawal event. The very first step will be enrichment and this is where we will
+attach context to this raw event like the device fingerprint, the IP intelligence and what is known
+about this account's history in the first place. Then will come the feature stage which is really
+just the system gathering a lot of evidence. So it starts asking questions like how old is this
+account? How many different cards has this device used in the last 24 hours? Has this IP address
+been involved in failed login recently? And is this purchase 10 times larger than what this
+customer normally spends? So each of those answers becomes a signal. Now those signals are not just
+like five or 10. They're actually hundreds to thousands of signals that go for each of those
+events. Then the next stage is something called as scoring where rules and models look at the pile
+of evidence and form their opinions. So up until now let's summarize what's happened. The event
+originated here. We attach some extra context to it. We attach a lot of signals to it and now with
+all of this information we have to judge whether this event is actually fraud or legit. Now the
+thing is at this stage there are multiple models not just a single model. So one model might think
+that the transaction looks normal. Another might think that the device looks suspicious. Apart from
+models there are multiple rules that fire. So one rule might fire because the account was created
+just 10 minutes ago which can be a red flag. Now the decision layer is basically the sum total or
+aggregate of all of these decisions and rules. So a decision layer will take into account all of
+those opinions and turns them into one of three answers. Approve the payment, decline or ask for
+more proof. And then the final stage is the action stage where you actually get the decision approve
+decline and step up that we talked about earlier. Now throughout this whole process everything
+up until now like signals scores decisions everything was getting recorded and we'll also
+record whether that signal turned out to be legit or a fraud like was it approved or declined
+because what we're going to do is we'll use all of this data along with the final decision into
+the training data for the model. So essentially from first principles what's happening is that
+the decisions that you make today will become the training data for all of the decisions that
+you'll encounter in the next quarter or even the next month. And this is why it's very important
+to record all of this information because we're basically creating our data set on which we'll be
+training our models and refining our model so that our fraud detection actually gets better. This is
+like a self-sustaining pipeline and anything that you don't log or record is information that you'll
+never get back. Now each of these stages in this pipeline has a hard engineering problem. So what
+we going to do in the rest of this video is we'll look at all of these stages and see what those
+engineering problems are and how they're solved. And the first thing we'll do is we'll look at
+the evidence gathering step because that is where most of that 100 millisecond budget that we
+talked about in which the fraud detection engine has to make its decision that budget actually
+disappears in this stage. Now, at the core of it, the strongest fraud signals are actually quite
+straightforward. So, the fraud signals are just questions about the last few minutes. Like, how
+many different cards has this device used in the last 24 hours? And you, who could be a legit user,
+you probably used just one or maybe two cards. But the card testing guy that we talked about
+earlier, who's just checking out his inventory, he's probably at 40, which means he's probably
+tested 40 of those cards. So, that's a red flag. The second question could be something like how
+many failed loginins have come from this network clock in the last 10 minutes. And just like this,
+there could be another question which is that for the same user, if the current login is coming
+from Poland, where did the previous login come from an hour ago? If the answer is Brazil, then
+it's a bit of a problem. It's a red flag. And the industry actually has a name for this. It's called
+the impossible travel problem because nobody flies that fast between Poland and Brazil in just 1
+hour. Or the fourth question could be something like this, which is, how does this amount compared
+to what's normal for this specific person? Now, a $3,000 electronics order at 2 a.m. tells you
+nothing on its own in isolation, but it actually reveals a lot if that particular account
+has spent the last 5 years buying secondhand books and now suddenly at 2 a.m. it's buying a
+$3,000 electronics order. So, like I mentioned, these kind of questions form the major signals
+for fraud detection. And they actually have a name. These are called as velocity features
+because every one of these answers to these questions has to be accurate to within a second
+or two because a card testing burst which is a fraud operator testing all your cards is over
+within a few minutes. But to engineer something like this is not very straightforward because a
+single decision that has to be taken requires a lot of lookups like hundreds of lookups and each
+lookup has to come back in about a millisecond because they all have to fit inside the same 100
+millisecond time slot or budget that we have which simply means that all of this computing cannot
+be done when the payment actually arrives because there is no time budget for that. So what PayPal
+does instead is they run each of these events on the platform through streaming pipelines that
+keep these signals continuously updated. So you have these signals per guard, per device, per
+IP, per account over sliding windows of a minute, an hour, a day or a week. And all of this actually
+flips the whole thing around because by the time your payment actually shows up, the system is not
+calculating anything new. It's been maintaining this answer this entire time that you were
+emitting other events on the platform before the payment. And if you've seen the snowflake video
+on my channel, this is the same thing as pruning that we discussed in that video where this entire
+technique is not doing something faster. It's just arranging the things such that all the work is
+already done before that event takes place. But this kind of a design, the precomputed design,
+it comes with a very specific kind of problem. And if you've ever put a model into production,
+you probably know where this is going because now with this every feature will exist twice because
+there is the offline version where your models train on months of history and the features get
+computed in big batch jobs and then there is the online version where that same feature has
+to be served in a millisecond out of the live stream encounters. So that means there are two
+different systems computing what is supposed to be the same number. And if these two systems ever
+drift apart, maybe one counts the last 24 hours slightly differently or one of them handles late
+arriving events in a different way, then the model ends up learning from one version of reality and
+operating in a different version of reality. Now, if you're not from a machine learning background,
+this can sound a bit confusing, but I'll explain to you with an example so that you understand
+this from first principles. Imagine you're teaching a pilot on one set of instruments.
+Let's say this one with months of history. So the model has been trained on this batch of
+data with months of history, but the model has to make decisions in real time. So that means what
+you're doing with your pilot is you're putting them in a cockpit where all the gauges and all the
+instruments are calibrated a little differently. And nothing looks obviously wrong with this setup,
+but the decisions with the pilot and also in this case the fraud detection system, the decisions
+actually get worse. And that's what makes this bug so dangerous because nothing actually breaks here
+and none of the services fails over and no alert goes off and there is no dashboard that's lighting
+up red. The model just loses accuracy over time because the world it was trained on is no longer
+the world it's seeing in production. Now I use the word world a lot and it will sound weird to you
+if you're not from a machine learning background again but the idea here is that you create a model
+of the world essentially that's what a prediction model really is even this fraud detection system
+so what you're doing is you're simulating a world mathematically with limited signals and you can
+read more about it with chat GBT or claude or even Google but anyway let's continue talking about
+how our model is actually getting worse with time now when the model actually gets worse with
+time as we saw here what happens is that fraud starts creeping ing up approvals are getting worse
+and everybody in the team is staring at healthy infrastructure metrics. So they're not able to
+pinpoint where things are going wrong and this issue actually has a name. It's called training
+serving skew and it kills a lot of risk models even when the architecture is perfectly all right.
+So what's happening here is that the model learned from one definition of reality and it got deployed
+into another version of reality. And some of the most expensive model failures in this industry's
+history have actually come from exactly this kind of mismatch. So how do you even fix something like
+this? Well, you define a feature only once with one definition and one source of truth. Then that
+same definition gets used everywhere in training, in validation and in production. So when the model
+asks how many cards has this device used in the last day. So where does this answer actually come
+from? Well, these questions usually land on a key value store that PayPal built themselves and they
+call it Juno DB and in 2023 they open sourced it. So the database underneath a payments company's
+risk decisions is sitting there on GitHub right now and you can check it out. But the scale
+it operates at is absurd. It serves around 350 billion requests a day. It sits underneath
+nearly every core backend service they run which is login risk transaction processing and they
+report 69s of availability which works out to under 3 seconds of downtime in an entire month
+and the design of this database is not exactly rocket science and I'll break it down for you with
+this animation. So essentially your service first talks to a proxy layer and the proxies do all the
+distributed systems work for you. They figure out which shard a key lives on using consistent
+hashing and they handle replication inside a data center and across data centers and they
+do quorum reads and writes. So one dead node does not stall a request. So just to be clear,
+this is your proxy layer and these are the data centers and this is the consistent hashing and
+in these data centers you see these storage nodes and these storage nodes are actually running DB
+which is the embedded storage engine which half the industry builds the database on top of and
+everything you see moving around here is actually encrypted in transit and on disk because this is a
+payments company and this whole thing that you see was a single threaded C++ program before getting
+rewritten in Golang. But the question we actually care about here is why did they write their own
+store which is Juno DB at all in the first place. And the answer actually is tail latency which is
+worth doing the arithmetic on because it changes how you think about P99. Normally P99 is a number
+that as an engineer you just watch on a dashboard. And just one slow request in a 100 sounds like
+a rounding error. And that's that's okay. That's how everybody operates. But in this case, one
+risk decision fires off hundreds of lookups in parallel and the decision cannot return until the
+slowest one also comes back. So let's say you fire 200 lookups and each one has a 1% chance of being
+slow. So the chance that all 200 are fast is.99 to the power of 200. So that's about 13% which
+means roughly 87% of your decisions are hitting at least one slow lookup. And at that fan out, P99
+is not a tail anymore. It's the normal experience of your product. So they did not build JunoDB for
+throughput. They built it because at this fan out, the tail is the product. Now before we go deeper,
+just a quick note. You'll find free resources from all my videos like these diagrams that I'm
+showing in this video on algro.io and you just have to create a free account and access all of
+that. Now, you can also sign up for $15 a month and get access to extremely detailed system design
+tutorials with case studies, production stories, and architecture breakdowns of the top software
+companies in the world, apart from hands-on labs, and specialization tracks. Now, if you
+want something more involved and hands-on, I also teach a cohort that runs only a few times
+a year, but it's invite only, but you can access all of that recorded content for just $799 for
+lifetime. Anyway, let's get back to the video. Now everything we've looked at so far is about judging
+a single event like one account, one device, one transaction. But graphs are different. A graph
+lets you take one confirmed fraud and ask a more valuable question. What else is connected to it?
+Because in a fraud network, catching one account often tells you something about 20 other accounts
+that you haven't caught yet. And to see why it works, you have to stop thinking about fraud as a
+crime for a minute and start thinking about it as a business with suppliers and costs. Getting a
+stolen card number is quite cheap. Millions of them are for sale, a few dollars each, and they
+get treated as disposable. Everything else in the operation is quite expensive and it's slow to get
+hold of. A device that is not flagged anywhere, like a clean device, it costs a lot of money.
+And a drop address, which is somewhere stolen goods can actually be delivered without anyone
+getting arrested. That also costs some real money. And a mule account, which is a real bank account
+belonging to a real person who will take stolen money in and pass it along, is genuinely hard
+to get and it can take weeks to set it up. So the fraud ring also does what any other business
+would do when some input is cheap and another is expensive. They actually use the expensive
+input as many times as they possibly can. So they'll use one device across 40 accounts and
+they'll use 12 accounts but they'll all cash out to the same mule account because mule accounts
+are expensive. But some of the things which are cheaper like stolen card numbers will just get
+used once. Now you might think that across so many accounts using that same mule account or
+the same clean device is actually quite sloppy and that maybe only inexperienced fraudsters do
+this but that's not true. Even the most advanced fraud rings do this and it's because they also
+have to be rational about their costs. Now every time you reuse something like our mule account in
+this case, it keeps drawing these lines which is the graph basically. So what PayPal essentially is
+doing it's modeling the whole platform as a graph. These nodes that you see here each of these are
+accounts, cards, devices, emails, phone numbers, addresses and bank accounts. All of these and
+the edges that you see between these nodes are the relationships between them. For example, this
+card was used on that account and this device has touched those five accounts and these 20 accounts
+all withdraw to the same exact place. Now, when you draw these graphs by mapping out the
+relationships between nodes, normal people form very small, boring clusters. For example, one
+laptop, two cards, one bank account. But fraud rings look very different. They have multiple
+accounts, multiple cards, multiple phone numbers, but they mostly map down to one mule account at
+the end. So a great way to think about this is that the cost-saving thing that makes the ring a
+profitable business is also the same thing that makes it visible to detection engines. So if you
+connect one account to it, you can also connect all the other accounts to it and also catch those
+accounts very easily. So everything we looked at with the graph connecting the nodes and all of
+that the only thing is you can't do any of that during checkout like when a user is checking
+out because a graph requires like hundreds of millions of accounts to connect them together and
+that's simply too large a data set to traverse in just a 100 milliseconds budget which we have
+for the fraud detection. So we actually have a split here and the graph runs at two different
+speeds. The slow speed is the batch speed. So this is the offline slow batch job and heavy jobs
+crawl the entire graph looking for some structure like cluster of accounts devices cards and bank
+accounts that are unusually connected. Now once a fraud account is confirmed risk gets propagated
+through all the connections to this node but along with a decay. So what is the meaning of this
+decay? So think of this DK like a rumor spreading through the social network. So your direct friends
+hear it loudly but your friends of friends hear a weaker version of it and by the fourth or the
+fifth hop it's mostly just noise and fraud risk attribution and propagation works exactly like
+this. So an account directly connected to a known fraud account inherits a lot of risk. Let's say
+0.98. But an account that's about four hops away like this one it's very low risk like2 and this
+decay actually matters a lot. So the more you hop the more decay there is. So it's 0.98 here
+6130 and2. So this one is very low risk. So this decay of risk is actually very important because
+imagine you have a network of hundreds of millions of accounts and almost everyone is connected
+to someone suspicious right so this guy who is probably not a suspicious account like a legit
+account is connected to a suspicious account in a network of millions of people legit people will be
+connected to fraudulent people that's understood so if there is no decay the graph would eventually
+tell you that the entire platform is risky now the output of this entire batch job which was this
+entire exercise that we ran here offline which was to assign risk to all of these accounts.
+The whole purpose of this is quite simple which is to assign one premputed risk score to all the
+accounts all of the devices all of the cards and addresses and this gets refreshed every single
+time this entire batch job runs. While the other risk grading mechanism is at fast speed and this
+actually takes place during checkout. In this one, the system does not actually walk the graph. It
+just reads the precomputed scores that we created in the batch job. And in this one, which is
+supposed to happen at high speed during checkout, it just goes through a few key value lookups.
+Maybe a onehop check like whether this device has ever touched a known fraud account. But during
+checkout, we're not doing any graph reversal. So this is called as the detective and bouncer
+analogy. Here the detective is the slow system which is the batch system and it does the slow
+investigation work. Whereas the bouncer is the fast decision system which checks the list and
+this actually works during checkout. But even with these two systems in place like a slow one
+and a fast one, there is still an obvious blind spot which is a brand new device. So a brand new
+device will have no history, no score and no graph signal at all. So that means it won't have these
+premputed scores. So how do you handle that during checkout? And this is where the velocity features
+come to help us. And we talked about them a few minutes ago. If you don't remember, then you
+can just go back in the video and look at the velocity features. So what essentially happens
+is that a device that's never been seen before in this network and it suddenly tries let's say six
+different cards, it emits extremely loud signals and that works even if the graph actually doesn't
+know anything about him. And because of that, the graph catches the connected fraud rings
+easily. So the velocity features catch the fresh attacks and together with the batch jobs
+they can cover each other's blind spots. Now when I was researching this video I also read a
+bunch of medium articles written by experts and most of them think that the graph and not the
+models is the real reason PayPal specifically is good at stopping fraud because PayPal actually
+sees both ends of every payment the buyer and the seller across 439 million accounts and tens of
+millions of merchants and even Venmo is owned by them as well. So on a Venmo payment, both people
+are on their network. So when a stolen card gets tested against one tiny merchant that nobody's
+ever heard of and that two out at an edge of the entire network, the counters and edges for that
+card update immediately. So that means every other merchant on the platform is now suddenly
+protected against a card that they have never seen before because of an attack that happened
+to somebody else entirely, which means that the defense actually gets stronger every time someone
+new signs up. And that's a strange property for a security system to have. And if you actually think
+about it from first principles, this is actually an example of an anti-fragile system. And I am
+especially a big fan of anti-fragile systems. And that's how I build my system designs at least.
+Now, if you don't know what anti-fragile is, I highly recommend reading the Nicholas Talib book,
+which is of the same name, anti-fragile, and it applies quite well in PayPal because usually more
+users means more attack surface. But here more users means more edges and more edges means the
+frauds show up much faster. Okay. Now let's talk about the fraud detection models themselves. There
+are four generations of them and all four are still running in production today. The generation
+one is called the Igore era which were handwritten rules. Plus it had some human investigators
+looking at any red flags or transactions that were getting flagged. And this was working quite
+fine because rules are quite transparent. Anyone can read them and you can write and ship rules
+very quickly. But the problem is that fraudsters can find the edges of a rule and walk around it
+very quickly like in a few days. And the second generation are logistic regression models and
+they were not very famous for their accuracy. But they became popular because this was the
+first time that the weights actually came out of the data instead of an analyst. Now if you've been
+around in machine learning since quite some time, you know that 2010s were the gradient boosted
+trees era. So this was the third generation of models that PayPal used. So they had those
+velocity features, ratios, graph scores that we talked about and all the other things that we've
+been through in this video. And transaction data is actually tabular data. So boosted trees were
+the best thing available to handle that kind of data for about a decade and they still haven't
+gone anywhere. Now this is the generation 4 models. Now this generation only exists because
+humans eventually became the bottlenecks because we can invent a lot of useful features but you're
+still guessing where the signal might be. And the deeper patterns actually are often spread across
+dozens of variables at once. And they're spread in combinations that a human being cannot detect. So
+what you do is you just introduce neural networks there. And they help in two specific ways. The
+first is that they can learn representations automatically. So think about something like a
+merchant or a device model like for example a particular model of iPhone or an email domain
+or a shipping address that the user is using and there could be millions of these unique
+values and a traditional model would largely treat them as labels whereas a neural network
+can learn which ones behave similarly which one behaves differently. So even if it's never seen
+this exact merchant very often, it may still recognize that the merchant behaves a lot like
+thousands of others it has already learned about and could be a fraudster. So similar entities end
+up closer together inside the model and nobody has to manually write down those relationships. The
+second advantage of neural networks is interaction effects. So humans are pretty good at inventing
+individual features. We can create counters, ratios, graph scores, and all the other usual risk
+signals. What we're much worse at is discovering combinations across dozens of variables at
+once. But deep neural networks can learn those combinations directly from the data instead of
+waiting for an analyst to think of them. Now we have seen four types of models and in production
+nobody actually trusts a single model to be right. So we've seen rules, trees and now neural
+networks and all of these models are actually used simultaneously in production and all of them get
+a vote and then there is a final decision layer that acts like a jury combining their opinions to
+a final verdict. So now your question would be why would you use these four different generations of
+models especially because the older generations are old and they might not be as effective as the
+new ones. And the answer is that in fraud, the patterns that one model might miss are often the
+patterns that another type of model can actually catch. So all of the models that we just discussed
+up until now, none of that actually works in a category of fraud that we're going to discuss
+right now. Because in this category of fraud, every individual moment actually looks completely
+normal. And this category of fraud is called account takeover. So let's actually go through one
+scenario of account takeover in this animation. So let's say there is a login at 2 a.m. and this
+login at 2 a.m. happens from a network that this account has never used. Then soon after that the
+password gets changed. Then a new shipping address gets added and then a large order of resellable
+electronics gets placed with expedited shipping. Now, every one of these on their own is something
+that you might do like people travel, people change their passwords, people move houses, people
+buy a laptop at a stupid hour. But the crime can actually be seen in the order because the sequence
+is exactly the pattern for every account takeover. So, as a fraudster, you get in, you lock the owner
+out, you redirect the goods and extract the value before anyone else notices. Now, what's important
+is that all of this has to run in this specific order because you can't redirect a delivery until
+you're inside and you can't stay inside if the owner can still reset the password. Which is why
+the newer models that we have seen do not score the event, they score the session. So, the newer
+generation models are actually sequence models, which is the same family of architecture that
+reads the text, but we just point them at a stream of user actions instead of a stream of words. So
+the question stops being whether this particular login looks bad and the question becomes whether
+this entire session reads like a normal one or this pattern is something which is a bit off and
+an account takeover looks like a regular session but with the order all jumbled up. And underneath
+even all of this there is a layer called behavioral biometrics which can actually fire up
+before any of this actually happens. And how this behavioral biometrics works is you look at how the
+password arrived. Was it typed with the rhythm of a human hand or was it pasted in by someone as a
+chunk by a script? And it looks at how a phone is being held and how it moves while you're using it
+or how the form that you're filling gets navigated because the person who actually owns the account
+has a motor signature and it's hard to fake. And whoever bought their credentials of a marketplace
+has everything like the password and everything, but they don't have the exact way that the device
+moves or the way that the actual user actually types in the password. Now, so far we have been
+talking about which models catch fraud better. But in production, there's a second question
+which is just as important. And the question is, can you run that model fast enough? Because every
+payment still has to get a verdict in roughly a 100 milliseconds budget. And this is where the
+newer models don't perform as well. Now you might be wondering whether there's any time left
+in that 100 millconds budget at all because we have already spent the whole budget on hundreds of
+lookups. And the answer is that the lookups go out in parallel. Like a few hundred of them cost you
+roughly one slow round trip and not hundreds of round trips staged end to end. Which by the way is
+the entire reason the tail latency arithmetic from earlier matters so much here. And whatever time
+is left after that round trip is what you have to actually run the models. And eventually that also
+stops being enough. So as the models get larger, it's very difficult to catch those frauds in that
+time budget. And it's difficult to do that on a CPU. So the usual response is to make the model
+smaller like distill it or quantise it. And you can trim the size of the model and squeeze it
+until it fits inside that budget of 100 millconds. and you have to accept the fact that because of
+this distillation or quantization, you're going to give up some detection performance. But PayPal
+actually went in the other direction and instead of shrinking the model to fit the hardware,
+they upgraded the hardware to fit the model, moving real-time inference from CPUs onto
+GPUs. And according to Nvidia's published case study about PayPal, this improved real-time
+fraud detection by roughly 10% while reducing the serving fleet of servers to an eighth of its
+previous size. And I think this is an interesting way to think about latency budgets. You usually
+cannot buy more milliseconds because the checkout is quite tight. You don't get a lot of time there.
+But you can buy more computation inside that same 100 millconds. And this is what the GPU is doing
+here. So from first principles, the GPU is not giving you more time like the budget is the same
+100 millconds. It's just letting PayPal spend that budget on a much smarter model by supporting
+more computation. Okay. So by now we have covered how the system makes decisions. But now let's talk
+about how it actually learns from those decisions it's made. Because fraud machine learning has a
+problem that architectures alone cannot solve. And the things that we've learned about up until
+now like the graph, the models, they all require supervised learning. Which means it needs labels
+and it needs someone somewhere to tell the system which past transactions were actually legitimate
+and which ones were fraud. And that sounds simple until you ask a very practical question which is
+how does PayPal even actually know that a payment was fraudulent? And in payment fraud, those labels
+usually come from something called a chargeback. A chargeback happens when the real card holder looks
+at their statement and they see a transaction that they do not recognize and they contact their bank
+to dispute it and the bank investigates and if the claim is upheld, the transaction gets marked as
+fraudulent and the money gets pulled back from the merchant. The important thing here is that
+none of this happens immediately. A customer might not check their statement for days. They
+might be traveling and they might not even notice the charge until the end of the month. And the
+card networks allow disputes to be filed weeks or even months after the transaction happened. But
+think about what this does to your training data. The freshest data, which is the data containing
+the attack that's running against you right now, is exactly the data with no labels on it. And
+the data that's fully labeled, cleaned up, and ready for training, often describes a world
+from many months ago. And we've seen this already in this video before. So you're permanently stuck
+learning to fight the last campaign because the ground truth actually arrives late. And the labels
+that do eventually arrive are not always clean either because not every chargeback is actually
+theft because there's a category called friendly fraud where a real customer makes a real purchase
+with their real card and then disputes it later because maybe they forgot about it, maybe their
+child made the purchase, maybe asking the bank for the money back was easier than dealing with
+customer support. So to the trading pipeline, that looks exactly like fraud, which means some
+fraction of what you're teaching the model to recognize as criminal activity is actually
+just regular human behavior. So delayed labeling that we discussed just now has some
+consequences. They might not be that catastrophic, but they're still important. Now, when the system
+approves a payment, it eventually learns whether the decision was correct. And what might happen
+is that a card holder might file a dispute many weeks later or maybe they won't do that.
+But either way, once enough time has passed, the system gets a label. But when the system
+declines a payment, that feedback loop actually breaks. So you don't really come to know if it was
+a fraudster whose payment got stopped or was it a legitimate customer whose payment should have gone
+through the system never learns from it because that transaction never happened. It got blocked
+and because no money moved so no chargeback can occur and there is no label that arrives after
+that and this actually creates a strange problem. What happens is that over time the model only gets
+feedback on the transactions it had approved and the transactions it had declined disappeared from
+the training data entirely. Now this may not seem like a big thing but let me walk you through some
+scenarios. So first just imagine that the losses they start rising in this platform. So the obvious
+response will be to tighten the thresholds and block transactions more aggressively. Every time
+you tighten it and you block more transactions you are reducing the amount of information that
+you're collecting about the transactions. And the model becomes increasingly confident about the
+traffic it already knows about and likes and it becomes increasingly blind to the traffic or the
+transactions that it's rejecting. And in machine learning, this is a form of counterfactual
+evaluation because you're trying to answer a question that history cannot answer. By history,
+I mean the training data that the model has. And that question usually is what would have happened
+if we had made the other decision. So instead of blocking it, what would have happened if we had
+let the transaction go forward? And the issue is that you don't have that data because the
+other decision never happened. You had only one decision which is like blocking the payment
+and that's it. You never had the other side of the decision. So you can't really learn
+from it. So in the fraud detection industry, it's very common to do something and it
+will sound very irrational when you hear it, but let me walk you through it. What you do with
+fraud detection models is that you deliberately approve a small fraction of the transactions that
+would otherwise have been declined by the model. So essentially what I'm saying is that let's say
+there are some transactions and some of them are going to be declined. You know that they're going
+to be declined by the model, but you approve some of them deliberately anyway. And what will happen
+is that some of those transactions obviously will turn out to be fraud but the company actually
+will knowingly accept these losses and they actually book this under the cost of collecting
+training data. Now the important detail here is that the selection of these transactions has to
+be completely random because if you approve the borderline cases that already look very safe
+then you have learned almost nothing. You've simply reintroduced the same bias but with a
+different name. So the goal here is actually to collect labels from the exact places where
+the model is least certain about the decision. And every month fraud teams around the world and
+not just at PayPal actually intentionally spend money to buy information. And if you think about
+it, they're actually approving these transactions, the ones that would have been declined to
+learn more and train their models to take better decisions. So they're kind of purchasing
+the labels on the hardest decision in the system. That's how they define it. And this might look
+like a very expensive way to train the model because you approve of fraudulent transactions.
+But the problem is there is no cheaper way to actually do this. So there are actually five
+lessons that I want to leave you with. The first is that a fraud detection model or a spam filter
+or an abuse system or an alerting pipeline, they all make different kinds of mistakes and those
+mistakes don't cost the same amount. So a better approach is to actually quantify the cost of each
+error and not just depend on model metrics. Second is to move any work possible off the critical
+path. Like the reason PayPal can make a decision in 100 millconds is not because it computes
+hundreds of features quickly. It's because most of those answers were already precomputed
+before the payment happened. Third is to have multiple components in your system that works at
+different time scales. So you saw that the rules engine can respond immediately but the models
+take more time to respond against an adaptive opponent. And by adaptive opponent I mean like
+a fraud ring leader who can really change their strategy very quickly. You need both of these type
+of components. And the fourth is the important part we looked at where we talked about the fact
+that if you start blocking the transactions, if you start blocking the negative traffic,
+you're also removing observations from your future training set in the sense you won't be able
+to train your models with that data because you've already blocked those transactions. And that's
+why you'll have to create control groups where you actually spend money to collect that data. And
+fifth is that the data advantages of a system they actually compound because PayPal doesn't just
+have great models. They have the entire network itself. They have their entire graph where they
+can learn from the complete network. So let's wrap everything up. PayPal's fraud detection system
+uses graphs, models, databases and pipelines and many other sophisticated things. But the
+core idea is very simple. Move the expensive decisions out of the critical path. The signals
+are premputed. The graph has already been analyzed before transactions happen. and the models
+have already been trained and which means that the investigations have already happened and
+by the time you click pay on PayPal the system is mostly just using the work it has done already and
+this is what lets it make a decision in about 100 milliseconds while still learning from billions of
+transactions in real time. So the broader lesson even beyond PayPal's fraud detection system here
+is that the best large scale systems, they don't just win because they're able to work faster
+with low latency, but they're able to win or perform really well because they did most of the
+thinking and most of the computation beforehand. Now researching these deep technical topics and
+architecture takes a lot of time and effort and this is why in some cases I release videos after
+15 days or so. And now I know you appreciate this effort, but please make sure you subscribe to this
+channel and like this video so it gets served to more people because content like this deserves to
+be out there. Otherwise, YouTube will just become an AI slot machine. And I'll also be extremely
+grateful if you can share this video on Twitter, LinkedIn or Reddit. And thank you so much
+for watching and I'll see you in the next

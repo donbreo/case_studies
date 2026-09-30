@@ -1,0 +1,240 @@
+You probably know by now that when OpenAI's model attacked Hugging Face back in July 26, Hugging
+Face had to defend themselves using GLM 5.2, which was a Chinese open weights model. And the only
+reason they had to use Chinese models is because the American closed models, the safe ones, refused
+to help. Anthropics model was one of the ones that said no to them. Think about how backwards that
+is. because you're paying a subscription to use the safe model and in the one moment when you
+actually need it when there's a live attack going on on your company, it won't help you with the
+problem. It won't even touch the problem. And the free model that you can run yourself helps you get
+the job done. So the safe option was not just useless, it was worse than useless because you paid
+for the privilege of being told no. And if you want the actual mechanics of the attack, how the
+model broke out, the exploit chain, all of it, I did the full breakdown on my other channel. You
+will find the link in the description. I'm not doing the mechanics in this video. This video is
+about what the incident tells us about safety. And what it tells us is this. Chasing AI safety, at
+least the kind that everyone is chasing, is a mistake. And we need to look at the whole thing
+differently. But before I can explain that, I have to explain to you what AI safety actually is
+because it's two completely different things that everyone just jams into one word. So here's what
+safety actually is. There are two kinds and they've got almost nothing to do with each other. The
+first one that you see on the left is something called as the refusal filter. You ask the model
+something. A classifier reads out your request and it decides if you're allowed an answer or not.
+It's judging you like airport security looking at you and your bag and guessing whether you're a
+problem or not. And this is the I can't help with that filter. And like me, you probably hit this a
+100 times every single day, right? The second one that you see on the right is something called as
+containment. This is the sandbox that the model runs in and the monitoring is watching what it does.
+The network rules stop it from reaching the internet. It's not judging anyone. It doesn't care who
+you are. It just physically stops the model from doing damage. So, think of this as a locked cockpit
+door. Now, when people demand more AI safety, they almost always mean the first one, which is having
+more filter. My whole argument in this video is that the first one is simply stupid and the second
+one is actually what matters. And we've got the balance completely wrong. So that this video doesn't
+just turn into a rant and I don't end up wasting your time. We'll actually follow some structure and
+here's how we'll go about it. First, we'll talk about why the filter only stops honest people and
+why every refusal actually helps the attacker. Then we'll talk about why the labs locked their most
+capable models away from everyone who is not a Fortune 500 company. So, the people who need them the
+most actually cannot get access to them. The third thing we'll talk about is that we'll discuss the
+three times we've already tried locking down a technology for safety like encryption, hacking tools,
+and bug disclosure. and that made everyone less safe instead. Finally, we'll get to the heart of the
+issue, which is when OpenAI's models went rogue, which of the two actually stopped them? Was it the
+filter that everybody argues about, or was it the sandbox that nobody is talking about at all? Now,
+this video is for SRRES, security folks, platform engineers, senior engineers, basically anyone
+who's on call when stuff like this happens. The argument that I'm making in this video is mostly my
+own, but the facts that I'll be referring to are from publicly available technical postmotms like
+the ones from OpenAI, Hugging Face, the UK's AI Security Institute, and Anthropic's own writeups.
+And I've just distilled all of the publicly available information into these nice diagrams. I'm not
+showing you boring diagrams, but these nice scenarios and scenes that make learning more
+interesting. And I got these done by hiring a 3D artist. She uses Blender with Claude Code. I tried
+doing these myself, but they consume too many tokens and the results are not as good as when you
+hire an actual artist. All right, now back to the video. Okay, so now let's again talk about the
+hugging face instant. Now, if you've watched the video link that I've put in the description, then
+you'll know how the attack worked. But what's more important here is what happened when they tried
+to defend against the attack. They had 17,000 events to dig through and not much time. So they
+grabbed a frontier model, an American one, and they started feeding it the attack data. And
+surprisingly, it refused because to analyze an attack, you have to show the model the attack, the
+exploit code, the malware, the traffic, and to the filter in the safe AI model, a defender's malware
+looks exactly like an attacker's malware. They're essentially the same bites on the screen. And
+hugging face actually named this in their postmodern report. They called it the asymmetry problem,
+where the attacker had no rules and the defenders were stuck behind every guardrail on the models
+they had normally reached for. So they gave up and just ran a Chinese model GLM on their own
+hardware and it worked perfectly because it ran locally. None of the attackers payloads and none of
+their own passwords had to leave the building and go to another company's cloud. So GLM, which is
+the model with apparently no safety, was the one that actually kept their secrets in house. So
+here's the core problem with that filter. It's not something that they can patch that easily. The
+filter only sees the words. So when someone says write an exploit for this service, it's the same
+sentence whether a criminal typed it or an engineer testing his own system typed it, the filter
+cannot tell which is which. So what ends up happening is that the honest guy who says I'm dealing
+with an active breach, here's the malware, he gets refused. Whereas the guy who lies and says this
+is for a CTF gets helped by the safe AI model. So the filter does not separate good people from bad.
+It separates honest people from liars and it blocks the honest ones. So, Frontier Labs have
+essentially built something that punishes telling the truth. Now, all of these diagrams will be
+available on my website. The link for that will be in the description. So, if they're not clear, you
+can just open the diagram in your own browser and look through them while watching this video. But
+also, just to let you know, I'm recording this video in 4K. So, if you just watch it on a bigger
+screen, you will be able to see all of the text and all of the components easily. Now, let's test
+the filter on a real attacker. Last November, Anthropic caught a statebacked group running a real
+spying campaign against about 30 organizations. And they were using claude code where the filter was
+fully on the whole time, but it did not matter and it did not stop them. They were able to beat the
+filter in two ways, both of which were very cheap. One, they told the model they were a security
+company doing authorized testing, so everything looked legit because context is just text and text
+is easy to fake. Second, they broke the attack into tiny steps. So instead of putting a single
+request saying hack this company, they put in multiple small tiny tasks requests. So the model never
+really saw the big picture and Anthropic estimates that the AI did 80 to 90% of the work for the
+hackers. And all of this is with Enthropic which apparently has the safest models on the planet. The
+UK's AI security institute tested a top open model and got past its refusals by just asking it to
+retry. That's it. But there's something very important here that I want to point out to you, which
+is that for a hacker, a refusal is actually a clue. So what does that actually mean? Well, when the
+model says, "I can't help with that," it's telling you that you're close to something important that
+the model wants to guard. So an attacker can just poke around and watch where the no kicks in and
+use that to zero in on exactly what they want. The refusal is not just failing to stop them. It's
+basically a metal detector which is beeping louder as they get closer to the truth. So I'll even
+argue that having an AI filter is worse than having no AI filter. Especially because with such
+filters, the defender cannot really use the model effectively because the defender needs the actual
+answer and he doesn't care about where the model would say no. So we've now watched attackers walk
+around the filter in a bunch of different ways and none of it actually stopped them. But there is a
+cost here and that's even worse than that. And it's one that nobody at the labs is going to put on
+the sales page, which is that the safe model is not just blocked more. It's actually generally
+dumber. And here is why. When you train a model to refuse anything that even smells like offense,
+you can't do it with a scalpel. You're not just deleting one bad answer. You're dragging the whole
+model away from an entire region of knowledge. And here's the thing, the reasoning a model uses to
+find an SQL injection for an attacker is the exact same reasoning it uses to find that injection in
+your own code first. So nobody has figured out how to make a model worse at one without also making
+it worse at the other. So the safe model doesn't just refuse more often. Even when it does answer
+you, it's more hedged. It gives up on the hard part faster and it's worse at the precise thing that
+a defender actually needs it for. And that is the deal tax. and you're paying it on every single
+query, not just the ones that come back with a no. And this is exactly why the whole hugging face
+thing played out the way it did. They didn't run to an open model because they were being reckless.
+They ran to the open model because on the day they really needed the model, the safe model was
+simply the weaker tool. And it gets worse because the genuinely capable model, the one that hunts
+down 0 days on its own, the labs won't even sell that one to you. They keep it in-house and they
+hand it out to a small wetted club of companies. Enthropic did exactly this with mythos about a
+dozen launch partners maybe 40 more organization and that's the entire list that got access to it.
+Everybody else including us we get a public version with the dangerous part stripped out. So think
+about what a refusal actually means. Now when your model tells you I can't help with that. That
+capability did not disappear from the world. It's running right this second for their red teams and
+through jailbreaks and open weights. It's probably running for the actual attackers, too. So, that's
+not really a safety feature, is it? It's an access list. So, when do you finally get off the denied
+side and you enter into the club where you get invited to try out these models? It only happens
+after you get breached. And that's literally how Hugging Face got into the club. That's how they got
+access to the models because the capable model showed up as part of the cleanup, not before the
+attack. It might have actually stopped the attack if they had access to it. So unless you've got a
+Fortune 500 logo, nobody's coming until you're already on fire and by then your only one real
+fallback is running an open model yourself. And this is the exact thing that US was reportedly about
+to ban. And by the way, none of this is new. We've actually run this exact experiment three separate
+times. And all three times the defenders paid the price while the attackers walked away just fine.
+The first one was encryption. Back in the '90s, the US government treated strong encryption like it
+was a literal weapon and only let companies ship a deliberately weakened version overseas. They
+called it exportgrade encryption and was breakable on purpose. The actual bad guys just used
+stronger encryption anyway. But that crippled weaker version got baked into software and sat there
+for 20 years until 2015 when researchers used those exact weak ciphers to break real life secure
+connections. Those were the freak and log jam attacks. if you remember. So, a weakness that we added
+for safety turned into a hole that hit everyone. The second one was hacking tools. When metas-ploit
+first came out and later Mimikats, everyone said the exact same thing they say about open models
+today that you're just handing loaded weapons to script kitties. If you're not from security
+background, metas-ploit and mimikats are very popular tools and script kitties refers to people who
+can't really code. They just use a lot of tools to hack. Anyway, so what actually happened was those
+tools became standard defensive gear. Every pentester on the planet uses them now. Mimikats in
+particular exposed how badly Windows was handling passwords and that's a big reason Microsoft went
+and built credential guard to close the hole. So in this case, the dangerous tool was the exact
+thing that forced the defense to even get built. And the third one is almost funny. It was about
+whether we should even tell people about bugs at all. Back in 2001, Microsoft literally called the
+public disclosure of vulnerabilities information anarchy. The logic was keep the details secret and
+the attackers won't be able to use them and that argument lost completely obviously because what
+replaced it is basically the entire modern security world CVE bug bounties Google's project zero so
+security in general got better because of it so that's three for three and here we are about to run
+the exact same play a fourth time on AI now before we go deeper just a quick note you'll find free
+resources from all of my videos on algro.io io. You just have to create a free account and access
+all of them. You can also sign up for $15 a month and get access to extremely detailed system design
+tutorials with case studies, production stories, and architecture breakdowns of the top software
+companies in the world, apart from hands-on labs and specialization tracks. If you want something
+more hands-on and involved, I also teach a cohort that runs only a few times a year and is invite
+only, but you can access all of the recorded content for just $799 for lifetime. Okay, let's get
+back to the video. Now the second thing which is the thing that I support as opposed to filtering is
+something called as containment. So let's compare filters with containment because containment has
+one property that filter can never have which is you can actually prove that it works. So just for
+context earlier in the video I had mentioned that safety is a bad idea but safety actually has two
+versions as I had mentioned earlier in the video which is filters and containment. We've been
+talking about filters up until now and they are really a bad idea. But the other type of safety
+which is containment is something that can actually work. But the issue is that not many people know
+about it and not many people are working on it. Take the simplest containment rule. The model gets
+no internet access and you can verify that. You can read the firewall rule, run a test, watch the
+traffic and confirm that nothing leaves. You could even put that rule in an architecture review
+diagram and defend it in a review. The sandbox, the monitoring and the resource limits, they have
+the same deal. They have real boundaries and you can point and check. But all of these properties
+are missing with a filter. Like if you ask what exactly does the filter block and when nobody can
+tell you that not even the people who trained it because a filter is a fuzzy judgment baked into
+billions of weights and it changes every time the model updates and you can't test it you can't
+prove it and you can't even predict it. So if you put two of them side by side like I've done the
+diagram on the left is containment on the right is filters one is a control you can verify which is
+containment the other you just have to hope about like no internet is confirmed versus yeah
+sometimes it usually says no which is what the filter does and somehow the entire industry has built
+its safety story on the second one which is the filters. So just now we've seen containment on paper
+but here's what actually happened when it met the real world and this is the part the safety crowd
+gets completely right. So let's look at how every single one of those disasters actually started.
+OpenAI's models breaking out in hacking hugging face. In that instance, safety was turned off for
+the test. And Anthropics 3 incidents this summer where the models reached the live internet again
+safeguards were off and it was a misconfigured test setup. So every model that got loose had its
+brakes deliberately turned off first on purpose for testing and Open AI actually measured it
+afterward. With the full safety system running, the monitoring and with the whole stack, the model's
+tendency to go break into infrastructure dropped by more than 100 times and their monitoring, if
+they just left it on during the test, would have caught the behavior and alerted a human a full day
+before the models ever reached hugging phase. And there's one detail that's important. The models
+kept attacking for days after they had already gotten the answer because they had convinced
+themselves the greater wanted a proper solution, which was a rule that didn't even exist. A model
+with no clean way to stop will just invent a reason to keep going and no prompt filter on earth
+fixes that. But if there's a monitoring system watching what it does and we've built a wall around
+what it can reach, then that actually helps. So if you ask yourself which layer actually held those
+models back, it definitely was not the filter because that was on the whole time and they schemed
+right through the filter. The only thing that ever contained them was the sandbox. Right up until
+the sandbox turned out to have a hole in it. On their own Frontier models inside their own lab, the
+filter was just pure decoration and the walls or the containment did all the work. So, let me give
+you the actual argument now as plainly as I can. Think of this as two dials. The first dial is
+refusal, which is the thing that reads your prompt and decides if you're allowed to run that prompt.
+So, I just want researchers to turn that one down because all it really does is stop defenders while
+barely slowing down attackers. The second one on the right is containment, which is the sandbox, the
+monitoring, the network walls that you can actually prove that they work. And I want researchers to
+turn that all the way up because that's the thing that stopped the damage every single time it was
+switched on. And there's an even bigger reason to focus more on containment. A sandbox with no
+internet access is exactly the same wall for GBD 5, GB 6, and whatever comes after that. it
+genuinely does not care how smart the model gets. Whereas the filter is the complete opposite. Every
+new capability the model picks up, you have to go retrain the filter to catch it. You're basically
+strapping a fixed filter onto something that keeps getting smarter and just praying that it keeps up
+and it won't. So containment ends up being the only kind of safety that doesn't rot as the models
+get better. So if I just reframe it just means that less AI safety was never really the point I was
+making. The point I was making is you don't need the dump safety which is the filtering which
+everybody considers as AI safety and we need a whole lot more of the safety that contains the AI
+model. Now we've got to talk about the tradeoffs to my argument because if I just skip past them
+then I'm not giving you the entire picture. And there's one real trade-off here that I generally
+can't get around because this whole argument of mine only works for cyber. And the reason I say that
+is that the strongest counterargument I've heard and it's from Anthropic's own CEO is about biology.
+And honestly, I can't beat it. In cyber, attack and defense use basically the same tools and
+defenders can move at machine speed. So handing the capability around helps both sides roughly
+equally. But biology is a completely different story. A model might help someone build a bioweapon
+in days, but actually defending against that same weapon takes years. Because if you think about it,
+it takes a long time to build and ship a vaccine. When the attacker moves in days and the defender
+needs years, then giving everyone the same capability stops being a good idea really fast. So my
+argument only works for security and cyber related stuff, which is the field that I'm from. So
+please don't stretch my argument into let's open source everything because that is a completely
+different question with a completely different answer. The second trade-off is that open weights are
+permanent. You can always pull a closed model back, but you can't pull open weights because the
+second they're out, they're copied everywhere and they're gone for good. and whatever safety you
+trained into them can just be stripped right back out. Researchers have shown you can plant a
+working back door into an open model in about an hour. And it's actually very cheap to do that. So
+let's just open up all the capable models is a one-way door with no handle on the other side. Which
+is exactly why the sane version of my argument is not about opening everything up. It's about
+testing. You measure a model cyber and biok before you ship it whether it's open or closed. So
+here's what you should actually take away from all of this. First thing is that when someone says AI
+safety, ask which one they mean. Do they mean the filter that judges the user or the containment
+that boxes the model inside? The second is we should never treat a refusal as a security boundary
+because a control that only works when the user cooperates is not really a control. Third is you
+should set up a capable model that you can run yourself before an incident like this hits because
+assuming that you can just call the API is useless because the API can sometimes say no. So having
+an in-house open source model also in your infrastructure can help a lot instead of just depending
+on the closed source models. The fourth is when an incident like this occurs a closed source model
+like claude ships your attacker payloads and your live credentials off to another server whereas
+running it locally keeps all of this inside your building. So just to wrap this up, in 26 the
+attackers had to follow no rules, whereas the defenders were constrained by the rules and the models
+that broke had their safety switched off and the models that refuse to help clean up had it switched
+on. So the answer to this is not just less safety, it's actually less of the safety that argues with
+you, that gets in the way and you need more of the safety that helps you contain the LLM. And I feel
+that the industry has got this completely backwards because right now a Chinese model was the only
+thing that was willing to help an American company hugging face survive an attack from another
+American company OpenAI. Now these deep dives take a lot of research and tons of work. So, if this
+changed how you think, subscribe and drop a like and send it to the one person on your team who
+keeps asking for more guardrails.

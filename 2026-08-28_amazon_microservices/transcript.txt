@@ -1,0 +1,337 @@
+In today's video, we'll look at a very controversial move that Amazon Prime has made . They moved
+from microservices to monolithic architecture, and the whole world, the whole internet, went crazy.
+So in March 2023, a small team of Amazon engineers published a blog post that said this. They said
+we took our serverless microservices architecture, threw it out, and rebuilt it as a monolith, and
+our infrastructure costs dropped by more than 90%. Teams are constantly redesigning things these
+days, and that's normal. But what's abnormal or abnormal is who posted it , right? This is Amazon.
+This is the company that sells us serverless architecture, and AWS spent a decade at conferences
+telling the entire industry to break down your monolith into microservices. And so, it's Amazon
+again, and Amazon's own video team said that we've gone the other way from microservices back to
+monolith. And simply going back saves them 90% of the cost. So what does this even mean and why is
+it so crazy? And that's exactly what we're going to explore in this video. For about 6 weeks, no one
+noticed this post that the Amazon team posted online. And then suddenly the internet found it, and
+it started the biggest architecture war of the decade, and Amazon's own CTO had to personally
+intervene. This video is intended for platform engineers, SREs, architects, staff, and executives.
+Everything here is taken from Prime Video's own engineering articles after they returned to a
+monolithic architecture. I looked through all the publicly available information, such as Amazon's
+own blog, the Prime Video engineering blog , AWS blogs, and blog posts from other people in the
+industry who responded to this particular blog post about moving back from microservices to
+monolith. And there are plenty of blog posts online with answers. You just need to search here once
+and you will find hundreds of such links. And what I did was I just went through and first mapped
+their architectural changes into these nice little diagrams. So, we're going to break down the exact
+changes they made to the architecture, and how they actually started saving money, and what was
+wrong with their architecture in general . For example, why didn't microservices suit them? So I'll
+break it all down for you with these diagrams. So make sure you stay until the end because this is
+going to be a very visual video and you're going to walk away with a lot of knowledge about how
+microservices should be evaluated and whether monolithic architecture will work for you at all when
+moving away from microservices. So, this is going to be a deep dive. Make sure you fasten your
+seatbelts and let's get started. Okay, so to keep things structured, I'm going to cover seven
+different points. First, why did Prime Video need this system at all and what problem was so
+important that Amazon built an entire architecture around solving it. And second, why the original
+serverless design seemed perfectly reasonable, and in fact , if you were designing it from scratch,
+there's a good chance you would have built the exact same thing as the Amazon team. And third, what
+actually broke this architecture. Why did their serverless architecture, which was working quite
+well, start to fail? And that's not what most people think. So what really happened was that two
+seemingly minor architectural decisions became the dominant cost drivers of the entire system. The
+third thing we pay attention to is what exactly broke in the original architecture and what forced
+them to move from microservices to a monolith. The fourth thing we pay attention to is how Amazon
+Prime, by moving from microservices to a monolith, actually scaled that monolith. You've probably
+heard everyone say that monoliths don't scale at all, but that's actually a very subtle statement.
+So, monoliths in many cases do not scale, but in some cases monoliths do scale, and we'll look at
+that in this video. Fifth, we'll look at why this rewrite from microservices to monolith has sparked
+one of the biggest architectural debates of the last decade, including a public backlash from
+Amazon's CTO. And sixth, we'll look at a lesson that almost everyone missed, because the real reason
+the original architecture failed has very little to do with microservices versus monoliths. And the
+reason for its failure is completely different. And seventh, I'll give you a rule that you can use
+in your own system design reviews. This will be a simple framework that will help you predict when
+moving from microservices to a monolith will actually save you money. So, let's look at this. Prime
+Video is one of the largest streaming services on the planet, and hundreds of millions of customers
+actually use it, and sometimes they also watch live sports events, like Thursday Night Football,
+where a huge audience shows up at the same minute. And when you actually broadcast video at this
+scale with millions of customers, problems often occur. And you get a lot of problems like block
+corruption, where the encoder crashes and part of the image turns into pixel blocks. You've probably
+seen this often, for example, when watching videos on Amazon Prime or any other video streaming
+platform. And the video may also freeze while the audio continues to play, or the audio slowly loses
+sync with the lips. So, there are all these glitches and problems that can occur while watching
+videos. But the problem is that when such failures occur, clients don't actually send error reports.
+They just leave. They just leave and move on to some other platform. So the Prime Video video
+quality analysis team didn’t want to lose these customers, and they had to create a tool that viewed
+streams exactly as a customer would. So this tool was supposed to take the actual audio and video
+and run a set of detectors on it. Many of them work on machine learning models. So it automatically
+marks audiovisual defects. And for this particular service, which is essentially responsible for the
+client viewing all the frames, the architecture they initially created had three components. The
+first was something called a media converter. It was responsible for receiving the incoming stream
+and splitting it so that the video was broken into individual frames and the audio was broken into
+decoded buffers. The second component was defect detectors, i.e. analyzers. There are several defect
+detectors in the conveyor. Each of them is specialized. So, one of the specialized detectors looks
+for block corruption, another for freezes, one checks audio- video synchronization, etc. And on top
+of all of this is the third component – orchestration, which in this case was AWS step functions.
+So, if you have n't used step functions before, it's essentially a controlled state machine, and it
+just decides what to run when. Now, to better understand this, let's follow a 1 second video through
+all these components so it makes more sense. So, the converter decodes the video into frames and
+uploads those frames to the S3 bucket, and the state machine switches forward and runs the
+detectors. Now each detector loads the frames it needs from S3, performs its analysis, and then
+reports. And the terminal machine ticks again, and then we skip to the next second of the video, and
+the whole process repeats itself again. So, to summarize, everything worked as serverless components
+connected by step functions with S3 as a transfer point in the middle. I hope everything is clear by
+this point , because if not, I recommend reviewing the previous sections and this section again,
+because we will be building on this going forward. Now, when you look closely at this architecture,
+you will notice that each component scales independently. There are no servers to manage, and each
+piece is a managed AWS service for which someone else is on call. This is how managed services work.
+So here we use things like S3, AWS step-by-step functions. These are all managed services where you
+are not responsible for support. And using these managed services, a small team can ship a lot in
+weeks because all the hardware of distributed systems, i.e. queues, retries, state, all of that is
+rented, not built from scratch. And this architecture actually worked for Amazon Prime, and the
+Amazon Prime team was able to launch a real product very quickly. But some problems arose during
+production. Before we dive in, a quick note: you'll find all the free resources from all my videos,
+such as the Excalidraw charts I show in this video, on algorock.io for free. You just need to create
+a free account and access them . In addition to these free resources, there are also many extremely
+detailed, well- written systems design tutorials with case studies, product stories, architecture
+analysis of the world's leading software companies, in addition to hands-on labs and specialized
+instruction, available for just $15 per month. But if you want something more challenging and
+practical, there is also an academy section on algorock.io where I teach a cohort, but it is only
+held a few times a year and by invitation only. But you can access all of this cohort's recorded
+content for just $799 for your entire lifetime. Anyway, back to the video. Before we go into our
+30-second break, I mentioned that the Amazon Prime team has started production on this service that
+they created to analyze or analyze the quality of video frames. The problem they were solving was
+that people would see these crashes and just leave the platform. So they built the service that I
+showed you, which uses S3 and Amazon Step Functions and so on. And then, after production started,
+they started to discover some problems. And these are the problems we will now consider. So, first
+of all, Step Functions, which they used, has a very specific pricing model . You pay for the
+transition of states. So every time the machine moves one step, that's a fee. So $25 per million
+state transitions, that's actually very affordable. But here it should be remembered that the Amazon
+Prime service we were talking about performed several state transitions for each second of each
+stream, approximately four transitions per second. So, let's say one stream lasts about 1 hour,
+which is 3600 seconds multiplied by four transitions in each of those seconds. So that's thousands
+of transitions just for one show. So now you start to realize the problem is that they didn't rent
+an orchestrator. They thought that, you know, we would use these managed services because they were
+so much easier to use, and they thought that we would just rent them and we wouldn't have to build
+all this ourselves. But now, when you look at these thousands of state transitions for each show,
+you find out that they no longer rented an orchestrator, and they did n't pay for frame processing.
+They actually paid to move these frames. And just to be clear, moving frames means moving from one
+component to another. And these boundaries between these components are called service boundaries.
+So, every time you move things with state transitions between all these services, between these
+borders, that's when you start incurring taxes. So, I mean, the actual processing in each of these
+components is actually cheap, but when you move them through AWS Step Functions billing, moving
+those frames between those boundaries results in the maximum cost. So because of all this, it was
+expected that the bill would be quite large. But something crazier happened, causing the bill to not
+even make headlines, and instead this crazy thing made headlines. AWS now also limits state
+transitions for each account and places hard limits on them . So Prime Video used AWS and these
+state transitions, and they hit these limits at only 5% of the expected load. So they never got a
+chance to even move from the dead point. So architecture did not become expensive on a scale as
+expected. In fact, she was physically unable to even reach the scale. So you can see that the
+expected workload of Amazon Prime was like this, but they couldn't exceed even 5% of their workload
+because the AWS Step Function transitions themselves were limiting them to that limit. So, while
+they thought that AWS Step Function would become expensive due to billing, the problem was that they
+weren't even at 100% capacity . They could never scale. Because Step Functions are actually better
+suited for business processes. So , placing an order on an e-commerce platform is perhaps only 20
+clicks. And that's the total number, so it's coming out pretty good. But Amazon Prime's workload, as
+we just calculated, was millions of conversions per hour, and that was a real problem. Now there was
+a second problem. So, you remember, we talked about those detectors that actually check the quality
+of each video frame. Now, for these detectors to work, you need to decode the video into frames, and
+this decoding process is actually quite expensive. And usually each of these detectors decodes its
+own frame that it works with. But to save money on Amazon Prime, instead of each of these detectors
+decoding the same video independently, the system actually decodes it once. So, the converter
+essentially writes the extracted frames to S3, and each detector simply reads the frames it needs .
+And as you might have guessed, because we've centralized this decoding process, and because each of
+these detectors is now pulling the frames it needs from S3, this, as you might have guessed, will
+significantly reduce the computational cost, and that's exactly what happened. But network and
+storage costs will actually increase because now you have to make a lot more network requests and
+store all those frames in S3. And the right way to think about it is that in distributed systems,
+costs don't actually disappear. They just move from one to the other. So now every second of video
+is converted into dozens of frame objects that are written to S3 once, and they are read by many of
+these detectors. And each extracted frame means another object was written to S3, and each detector
+meant another round of reading from S3. So, individually, all of these operations are tiny, but at
+the scale of Amazon, they became one of the biggest costs in the entire pipeline, and that was the
+problem. Now there's something else that's a little crazy, which is that the S3 actually gives you
+11 nines of durability. And S3 is designed to ensure your data survives almost anything for
+centuries. Now, for any other type of data, like financial data or invoices, this is a great thing,
+but Amazon Prime was paying for this guarantee on video frames that only had a useful life of about
+1 second. So you could say they rented a bank vault to do something as simple as passing a note
+across a table. Now this is the most important section in the entire video because if you understand
+this, everything will make sense. Now, in one process, passing a video frame from one component to
+another is just a pointer. It only takes nanoseconds and is completely free. But that's not what the
+original Amazon Prime architecture did. Remember the path we took earlier? The media converter
+decoded the video frame, then wrote that frame to S3, and the defect detectors downloaded the same
+frame back from S3 before performing any analysis. In other words, the frame crossed the boundaries
+of the service. So what could have been a simple in-memory transfer turned into a distributed system
+operation . Across a service boundary, the same frame must be serialized, sent over the network,
+stored, read back, and deserialized by another service. So what used to be a memory access is now a
+network request. And this overhead is called the microservice tax, which means that every time data
+crosses a service boundary between services, you pay this cost. Now, whether the tax is a rounding
+error or a disaster comes down to just two variables. The first is how large the payload is that
+crosses the boundary, and the second is how many times per second it crosses that boundary. So, for
+a small payload with infrequent intersections, like for an order ID at the checkout, this
+microservices tax is nothing. But for a huge payload with constant intersections, such as video
+frames, in this case for each stream with each detector, this tax on microservices becomes
+significant. So, if you think about it, Prime Video placed the service limit on the busiest path in
+the entire pipeline, and that's exactly the mistake they made. And at the end of the video, I'll
+show you a simple rule, as I promised, for detecting such errors before they go into production. So,
+you already understood that the main problem here was that each frame was written to S3, read by
+multiple detectors, and processed by multiple services. In the previous section, we gave this a
+name. We called it the microservices tax. Now that the team saw this, the fix was simple for them.
+They thought about removing the distance or essentially merging all these services into one service
+. So, here's what they changed. They took the converter and each detector and combined them into one
+service running on ECS. It sounds like a small architectural change, but it's not. In the old
+system, the converter decoded the frame and then transmitted it, writing to S3, and the detector
+then pulled that frame back from S3 before doing any work. So, let's take a closer look at what's
+going on here. A video frame exists for only a fraction of a second, but to move it between two
+performers, the system treated it as constant data. So they serialized it, sent it over the network,
+stored it long-term, replicated it, read it back, and deserialized it. And all this work was done so
+that another piece of code, that is, another service, could view the same pixels. But this new
+architecture, which essentially takes all of these services and combines them into one ECS monolith,
+now eliminates that entire journey. The converter now creates a frame and the detector reads it
+directly from memory, and the pixels never leave the machine, and nothing is serialized, nothing
+crosses the network, nothing is written to long-term objects. So, data transfer between services has
+gone from moving megabytes across a distributed system to simply transferring a memory reference
+within a process, as they are now all combined into a single service. And if you remember our
+orchestration layer, which was the third component, it consisted of AWS Step functions. Well, this
+level of orchestration has also been reduced in exactly the same way. So what was previously a
+workflow step written in a managed service has now become a regular control flow. So, instead of
+asking another system what should happen next, the program simply executed the next line. So, so far
+it's more or less the story of how they went from serverless or microservices back to monolith. But
+this is Amazon Prime and you need to scale it to millions and you might think that monoliths don't
+really scale. Well, sometimes they don't scale, but this one actually scales. And the reason has
+nothing to do with monoliths, it has everything to do with workload. Each video stream is
+independent, and detecting a quality problem in one stream does not require information from any
+other stream. So there is no cross-threading , no shared state, and no coordination between these
+pipelines, and this completely changes the scaling problem. So, instead of breaking the system into
+smaller services, Prime Video simply runs more copies of the entire pipeline. So a thin routing
+layer is in front and assigns the flows to different instances, for example, flow A goes here, flow
+B goes there, and that's it. And each copy contains the entire workflow. So, each of the copies will
+have decoding, analysis, detection, basically all of that. And since the threads are independent,
+these copies should not interact with each other. And this is an important distinction. Therefore,
+people often think that scalability requires decomposition . This is not true because scalability
+actually requires independence. And this architecture actually gives you a lot of independence,
+because here you essentially first combine all the microservices into one service, and for each of
+the services you just run multiple copies. So, we just showed you four copies running for the same
+microservice, but it's important, as I mentioned, that each of the copies has everything it needs to
+process that particular frame. And each of these copies can operate completely independently of each
+other, and so scaling this monolith is much easier than scaling other types of monoliths. So , this
+is actually a very common rule that architecture engineers follow , which is that when units of work
+don't interact, it essentially means that if those services don't have to interact with each other,
+you can scale the entire pipeline. By the entire pipeline, I mean that this copy of the service has
+everything you need, so you can scale this entire pipeline as a single unit. So, everything sounded
+good so far, but there was one catch. The detector library has actually continued to grow, and these
+detectors are not simple pieces of code. Many of them are actually machine learning models, which
+means their weights need to be loaded into memory before they can run. So, as more detectors were
+added, one instance eventually reached a physical limit. It could not fit all the models in RAM at
+the same time. So, instead of breaking the service into smaller pieces again, the team simply
+created different copies of the application and had different copies of the application, each
+handling different types of analysis. So this means that the code remains the same, but different
+copies of the service, like these three, are different copies, and they will load different subsets
+of detectors. For example, there are detectors A through E. This copy of the service, even though
+it's exactly the same program as this one, so we're just creating multiple copies of this service,
+it will only load three of the entire set of detectors, which is a subset of the entire set of
+detectors. Similarly, here too, only a few or a small subset of the entire set of detectors will be
+loaded, and similarly here too, another set or another subset of detectors will be loaded. So, think
+of it this way: a single instance like this is responsible for processing the audio. This means it
+will run audio models. Another will launch video models. The third may run a specific or specialized
+set of quality checks. So, just to reiterate, each of these instances runs the same code, and
+they're actually a copy of the same service, but they just do different things. And this means that
+all these machines have different configurations. And this is where the terminology starts to get
+confusing, because this is no longer a classic monolith, but it is also not a park of independently
+deployed microservices. Because for it to be a microservice, the main criterion is that you have to
+run different code or different business logic in each of these services, but here the business
+logic and the code are the same. So what they ended up creating was a single system that scales
+through replication and specializes in configuration. Right? This is very important. It scales
+through replication because you simply have multiple copies of the same application, the same code,
+and it specializes. This means that each of these copies does something different by configuration.
+And this gray area turns out to be important , because that's where much of Amazon Prime's modern
+architecture resides. The results of adhering to such an architecture were very impressive, as
+infrastructure costs decreased by more than 90%, which we saw at the beginning of the video. But the
+bigger win here wasn't just money or cost savings, as at the old price, Prime Video could only
+afford to monitor a subset of its streams. But with the new price, which has been significantly
+reduced, she can now afford to monitor all video streams. So, the transition from microservices to a
+monolith not only made the system cheaper, but also made the original goal economically feasible.
+The team published the results in March 2023, and for a few weeks almost no one noticed, and then
+the entire internet learned about the publication. And when the internet learned about the
+publication, it immediately escalated into a monoliths vs. microservices debate. So one side of the
+internet, looking at the headline, concluded that Amazon replaced microservices with a monolith and
+then cut its costs by 90%. And that means monoliths are great, and monoliths win. But the other side
+actually claimed the opposite. They said the original architecture helped the team move quickly,
+learn workloads, and launch the product into production. And once they understood where the costs
+were coming from, they were able to optimize the more expensive part. And in the midst of these
+truly heated debates, Amazon's CTO found himself. And he said their goal was not to create a
+monolith. The goal was also not to create microservices. The goal was to create an architecture that
+best fits the workload. Prime Video hasn't proven that monoliths are better. He simply proved that
+architecture is a moving target. And as the workload changes, the architecture must evolve with it.
+So, if you've been following this channel for a while, you're probably aware of my 6-hour deep dive
+video on microservices on this channel. If you have n't watched it yet, please do so, because for
+effective work with microservices, here is the rule that I talked about in this video. So the rule
+is to consider the limits in the system. If you're not quite sure what the term "boundaries " means,
+boundaries are essentially the boundary between a service or microservices. That's exactly what we
+discussed in this video. In any case, for each boundary, two questions need to be asked. How much
+data crosses it and how often? These two numbers show whether the border is cheap or expensive. In
+the case of Amazon Prime, the data crossing the boundaries was video frames, and a video frame is
+large, frames are created continuously, and there are thousands of streams. This means that a huge
+amount of data crosses the service boundaries every second. And we saw in the video that every
+crossing of this data between boundaries requires serialization , network transmission, reading from
+storage, and orchestration. This effectively means that the discovery work was not expensive, but
+moving frames between these services across this boundary was very expensive. And if you compare
+that to something on an e-commerce platform , where an ordering service, say, is talking to a
+delivery service, the payload is tiny, the messages are infrequent, and the cost of the boundary is
+negligible. So, dividing the system into separate services or microservices makes sense. And Prime
+Video's problem wasn't microservices. It consisted of placing the service boundary directly in the
+path of a continuous stream of video data. So, with this rule that I'm explaining to you, you can
+detect this error before you write a single line of code. So always keep this in mind, just look at
+your system design and ask yourself how much data crosses these boundaries, and how often does it
+cross them? Because it will save you millions of dollars later. There is another lesson I want you
+to learn, which is that microservices are not about performance first. They are actually about
+property, meaning it is not just a technical problem, but also a human problem. And also how human
+teams work together, and as a technical lead, you have to understand this, which is that a service
+boundary allows one team to build, deploy, and manage their part of the system without having to
+coordinate every change with everyone else. And this is a real advantage. Independent deployment,
+independent releases, and smaller blast radii. And if you look at the Prime Video pipeline, you 'll
+see that one team owned all of it. Now all components process the same streams, and as traffic
+increases, the entire pipeline scales together. So there was no separate team to separate from, and
+no independent scaling problem to solve. So, service boundaries provided very little benefit, but
+they still carried all the usual costs such as network transitions, serialization, orchestration,
+storage, and operational complexity. And that's why the transition from microservices to monolith
+worked so well. This wasn't removing microservices, it was removing boundaries that didn't buy them
+or give them anything new. And that's a useful question you can ask yourself in your own systems.
+What benefit does this limit actually give us ? So, if the answer is not independent ownership,
+independent deployment, or independent scaling, then the boundary may add more cost than value.
+Because the cloud bill has actually decreased, but the tradeoffs haven't gone away. So the first
+trade-off is that deployments have become more connected. Changing one detector meant redeploying
+the entire service, and the explosion radius from a bad deployment simply increased. Secondly,
+capacity planning has once again become a problem for Amazon. The serverless version scaled
+automatically, but the new version ran on EC2. So the team had to make sure in advance that enough
+capacity was available . Third, the insulation has become weaker. In the old design, the components
+worked separately, while in the new design they used the same processor and memory. So a resource-
+intensive detector could affect everything else running in the process. The fourth trade-off is that
+configuration has become more important. Different copies of the service loaded different sets of
+detectors, which created a new class of operational errors. The biggest caveat here is that this
+solution actually works because of what the workload looks like. Because Amazon Prime was
+continuously processing a huge amount of video, and for that kind of workload, it makes sense to
+keep everything in a single process. A completely different workload could lead to a completely
+different architecture. Now, nothing in this story proves that the serverless version was wrong.
+This just goes to show that architectures have tradeoffs, and the right answer depends on the
+workload you are trying to accomplish . So, there are five lessons to be learned from this. First,
+every boundary has its own cost, so before you take the system apart, ask two questions. How much
+data crosses the border and how often? And the answer will usually tell you whether it's worth
+sharing. Second, your cloud bill also needs to be factored into the architecture diagram, and the
+largest articles usually show the most important data flows in your system . Third, you can learn
+from this that you can use serverless systems to learn the system, and then you can use dedicated
+infrastructure when the workload really becomes predictable. Fourth, you can separate systems where
+teams need independence. So, if a boundary doesn't provide you with independent ownership or human
+scaling, think carefully before paying for it. The fifth concerns scaling. So, even with monoliths,
+as we've seen, they could scale very easily using a photocopy architecture or simple replication,
+essentially. So, let's summarize. With Amazon Prime, the team started with a serverless architecture
+because it allowed them to move quickly and understand the workload. And when the system reached
+production scale, it discovered that the real cost was not in the detectors, but in moving video
+frames between services. And every transfer meant serialization, network transmission, storage
+operations, and orchestration. At a low scale, these costs are manageable, but at a high scale, they
+dominated their bills. So they changed the architecture, moved components into a single process,
+kept frames in memory, and eliminated most of the overhead. The result was a reduction in
+infrastructure costs by more than 90%. More importantly, it actually made full-scale monitoring
+available , and instead of monitoring a subset of streams, they could now monitor them all. The
+lesson is that architectural decisions have costs, and those costs become visible on a massive scale
+. So the next time you design a system, pay attention to the limits. Ask what data crosses them and
+how often they cross them, and ask if the benefits of that boundary justify the cost. And that's
+exactly what Prime Video engineers ended up doing, and that's why they ended up with a different
+architecture than the one they started with. Reading, researching, and processing all this
+information, then thinking about what should actually be in the video and creating these diagrams
+takes a lot of time. And that's why there are usually 10-12 breaks between my videos, because I work
+on them after my main job. So it takes a lot of effort and if you liked this video please share it
+on your social media, tag me and subscribe to this channel and I will see you in the next video.

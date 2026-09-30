@@ -1,0 +1,371 @@
+Snowflake handles over 5 billion requests every day. It's a $ 90 billion company , and its IPO was
+the largest in software history. It was so large that Warren Buffett, a man who had not participated
+in a new share offering since Ford went public in 1956, broke his 64-year hiatus for this very
+reason . And almost everything about how this database works sounds crazy. It intentionally does not
+contain any indexes. It never updates files. Each table consists of files that, once written, never
+change again. And if you delete a worksheet, just enter one command, undrop table, and everything
+will go back. By the way, all three of these things are real. I'm not hallucinating. And it all
+stems from one decision they made in 2012. He was hosted by two Oracle architects and a Polish
+database researcher in a small office in San Mateo. They actually went against the rule that every
+serious database has been built on for 30 years: keep computing power close to the data. They took
+the data and placed it far away, in someone else's storage system on the other side of the network .
+And everyone who heard this idea said the same thing : it would be too slow and nothing would work.
+This video is a story about how a database far from its data turned out to be faster than those
+working directly on it. This video is for data engineers, platform engineers, SREs , architects, and
+anyone who develops scalable software. All information here is taken from Snowflake's own published
+materials: the Sigmod 2016 paper where they laid out the entire architecture, the NSDI 2020 paper
+based on statistics from 70 million real-world queries, their engineering blog, and the founders'
+speeches. I simply systematized all this publicly available information in the form of diagrams.
+Stay until the end because this video will be very visual. In this video we'll look at seven
+different things. The first is why all data warehouses before Snowflake combined storage and
+compute, and why Snowflake separated them. Second, we'll look at micropartitions, why a Snowflake
+table is actually thousands of immutable files, and how S3's biggest limitation became the
+foundation of the entire database. Third—we will learn what " pruning" is, which Snowflake uses, and
+how it helps find a single row in a petabyte of data without any index. Fourth, we'll look at
+Snowflake's time machine feature, how data immutability has evolved into time travel, and how the
+undrop command works. We will also see how Snowflake can clone a 100- terabyte database in just 1
+second. Fifth, we'll look at how Snowflake's virtual storage separated compute from storage and why
+this finally prevented ETL jobs from stalling other users' queries. Sixth, we will explore the cloud
+services layer, which is the “ brain” of Snowflake, as well as the tiny database that underlies it
+all. And this is something that is never mentioned in any videos. And seventh, we'll look at
+Snowflake's innovative per-second pricing and marketplace, and how it all helped build one of the
+largest software companies in history. So let's get started. To truly appreciate what Snowflake has
+done , you need to understand what everyone else has done before it. Before Snowflake, almost every
+data warehouse was built around one fundamental idea : distribute data across a cluster and let each
+machine process its own data. Now imagine a cluster of 20 machines. Instead of storing the entire
+database on a single server, the data is actually distributed across all 20 machines. Each machine
+is responsible for a separate part of the data. So if you zoom in on any of these machines, you'll
+see that each one stores its data on its own local disk and uses its own processor to process it.
+So, when a request comes in, the work is distributed among all 20 machines, each of which scans its
+data in parallel, and the intermediate results are finally combined into the final result. This is a
+very popular and widespread architecture . It's called " shared nothing" . Each machine, as you have
+seen, has its own processor, its own memory, and its own local storage. And apart from exchanging
+results at the end of the query, the machines do not share resources with each other. And for almost
+20 years, it was the “gold standard” of how analytical databases worked. So Teradata, Netezza,
+Vertica, and the original Amazon Redshift—they all followed this very design. And the reason for
+using 20 different machines, each with its own processor, memory, and local disk, and none of which
+share resources, is the following. The main reason for this architecture is very simple: back then,
+networks were very slow, and disks were local. Therefore, reading data over the network, for example
+from here to here, would be significantly slower than reading directly from the local disk. So the
+industry lived by one rule. Do not move data to calculations. instead, move the calculations to the
+data. And popular databases like Hadoop were built on this very principle. But this solution comes
+at a price, because when storage and compute power are combined, you inherit three problems that
+never go away. And the first of them is the scaling problem. Now imagine that you need to add five
+more machines to your existing 20-machine cluster that we just saw. And once you do that, the data
+will no longer be evenly distributed. So you will have to redistribute terabytes of data across the
+cluster before these newly added machines start to benefit the network. However, this data movement
+to new machines can take days, and performance usually drops while this happens. The second is
+competition for resources. Every workload uses the same cluster: your ETL pipelines, BI dashboards,
+scheduled reports, and custom SQL queries all compete for the same compute pool. So one heavy load
+will slow down everything else. And the third is overbooking. Engineers like you and I typically
+size a cluster based on traffic at the end of a quarter, as that's when demand is highest. But for
+the rest of the year, much of this expensive computing power simply sits idle. But the fact is that
+reducing the cluster again means having to redistribute all the data. So most teams just leave it
+running to avoid this headache. So these are three different problems that we've identified, and
+their root cause is that storage and compute are constantly tied or welded together. Therefore, you
+cannot scale easily without facing these three problems. The idea behind Snowflake was to simply
+separate compute and storage. So, if separating storage and compute solves all these problems, why
+hasn't anyone else done it before? Other companies couldn't do it because it was simply impractical
+for a long time. It didn't work economically. But around 2012, three things changed. First, cloud
+object storage has become mature. Amazon S3 now offered 11 nines of durability and virtually
+unlimited capacity, providing storage cheap enough to build an entire database on top of it. Second,
+data center networks have become significantly faster. So reading data over the network was no
+longer too slow—it was almost as fast as reading from a local disk. And third, calculations have
+become elastic. Instead of buying servers, you could rent them by the minute, abandon them, and
+launch new ones when you needed them. Most people looked at these changes and new improvements in
+the industry and saw only better infrastructure. But those three people we talked about, working at
+Snowflake, saw a chance to rethink data warehousing from the ground up. So now we're going to talk
+about these engineers, but I want to warn you that I might be pronouncing their names incorrectly.
+So please be understanding about this. Benoit Daguil and Thierry Cruans spent over a decade at
+Oracle building the old generation of databases, and Marcin Zzukowski, as a researcher in Amsterdam,
+created one of the fastest analytical query engines. So these three had a good understanding of why
+the old architecture existed, and they also realized that the assumptions on which it was based were
+no longer relevant because these three things had changed. Their idea was surprisingly simple. They
+simply said, "Let's change the old rule: put every table or every byte of data in cloud object
+storage and keep exactly one copy," and make the computation completely non-persistent, so that
+clusters that don't contain data can start up in seconds, execute queries, and disappear when
+they're no longer needed. Now it happens that storage can grow independently of compute, and compute
+can scale independently of storage. Neither of them should wait for the other. They planned to use
+S3 for storage. And, of course, everyone immediately had the same objection. They said S3 would be
+slow. Reading from cloud storage has much higher latency than reading from a local disk. So how can
+you build a database on all of this ? Perhaps. This is impossible. That's the question the rest of
+this video will answer. So, the question arises: what does Snowflake actually look like? At a high
+level, it is structured as three separate levels. At the heart is the repository. This could be S3,
+Azure Blob Storage, or Google Cloud Storage, and each table lives here and only here. In the middle
+are virtual storage with clusters of persistent computing that you rent by the second. This is where
+requests are executed, and above that is the cloud services layer. This is the brain of the entire
+system. It handles metadata, query planning, transactions, and security. So every query essentially
+begins its life right here. We will look at each of these levels in turn and the engineering
+challenges that lie behind each of them. So what does a Snowflake table actually look like when it's
+written to S3? This is not one large file. It's actually thousands of small files. Snowflake
+automatically slices each table into what it calls micropartitions, which are files that each
+contain between 50 and 500 megabytes of uncompressed data. The term "microsections" will be
+important because I'll be repeating it throughout this video. A large industrial table can consist
+of tens of thousands of such files stored in S3. So, within each of these microsections, data is
+stored in columns, not rows. Let's consider an example from e-commerce . So all order dates will be
+stored together, all order amounts will also be together, and all customer IDs will also be
+together, because each column has its own characteristics and Snowflake can compress each of them
+independently using the best algorithm for that data. But the really important detail here is not
+the data itself, but what Snowflake records about each file. For each column in each microsection, a
+small amount of metadata is stored, containing the minimum and maximum values , as well as a number
+of other statistics. I want you to remember these two things: the minimum and maximum values, and a
+few more statistics , because it does n't sound very exciting right now, but it's what allows
+Snowflake to scan petabytes of data without using indexes. Now let's talk about the one rule that
+governs everything in Snowflake, namely: data files are immutable. This means that once Snowflake
+writes a microsection, it never changes it again . And part of this property comes from S3 itself .
+As you recall, Snowflake uses S3 for storage, and objects in S3 are actually writable only once: you
+can create them, read from them, or completely replace them, but you cannot modify any part of an
+existing object. Most systems consider this a limitation, but Snowflake actually built its entire
+architecture around this feature. So when you update a single row in Snowflake, the system doesn't
+touch the file that contains that row. It actually writes a completely new file with the same data,
+excluding the old version of the row and adding the new one, and then updates the table file list.
+So, essentially, the old file is removed from the list, the new file is added, and the old one
+remains in S3 untouched. So, if you think about it, a spreadsheet for Snowflake is just a list of
+files. In other words, a table in Snowflake is just a reference to the actual data stored in S3. So
+this table is essentially just a list of files. So once you change this list, you are essentially
+changing the table without touching the data itself underneath it. And if you want to go back to the
+old list, you can do so. and, in essence, you are saving a previous version of that table. And this
+is the core idea behind Snowflake's time travel feature, which we'll explore shortly. Now I want to
+introduce you to Snowflake's most unusual design solutions. As you know, almost every database
+relies heavily on indexes because they allow you to jump to the rows you need immediately. But it
+comes at a price. With each addition or update, you have to maintain the index, they require
+additional storage, and at large scales they have to be constantly tuned and rebuilt. Therefore,
+Snowflake also analyzed this compromise and completely abandoned indexes. So, standard Snowflake
+tables simply don't have indexes. Instead, Snowflake does something very clever. Each microsection,
+as I said, contains a small amount of metadata. For each column, Snowflake records the minimum
+value, maximum value, and some other statistics. We saw this in the previous section, but I asked
+you to remember it because it allows you to do something really impressive. Now imagine that your
+query is looking for data where the order date is March 3, 2024 . So far we have used the example
+from e-commerce . That's why we talk about the order date. So in the case of Snowflake, what happens
+is that the system doesn't read any files. So, before reading even a single file, Snowflake simply
+checks the metadata. Essentially, it checks these micropartitions that are stored in S3, if you
+recall, for metadata. If one of these microsections contains only dates between January 1 and
+January 9, then Snowflake already knows that this file cannot possibly contain the answer to our
+query, where the date is March 3, 2024. So, Snowflake never actually reads this file because it
+knows that the data it needs is not there. If you repeat this metadata validation process for all
+micropartitions, checking to see if your data is there, you will realize that out of the 50,000
+files in the table, which is the sum of all micropartitions, only 200 will be relevant. So the query
+didn't even touch the repository, but we have already filtered our responses from 50,000 to just
+200. And all of this happened just at the metadata level by simply viewing them. This is the main
+point. The main difference is that an index tells the database where the data is located. Whereas
+Snowflake metadata tells the system where data is definitely missing. So, the data is definitely not
+in this microsection, and not in this one, but here are the relevant ones, where they may be. That's
+why out of 50,000, only 200 will be, let's say, relevant. This metadata-based data filtering
+approach only works because data naturally comes in groups. Previously, we looked at the example of
+an e-commerce platform that processes orders. So think about it this way. Orders for the same week
+are usually recorded together in the database, right? Therefore, each microdivision covers a
+relatively small range of dates. For example, here will be e- commerce data for one week. Another
+microsection will contain data for the following week. So, they all store data for certain dates,
+but with a small time gap between them. But let's say, sometimes even if this natural order, i.e.
+grouping data by small date ranges, starts to break down , Snowflake reorganizes these files in the
+background to keep those ranges small. If you keep your date ranges narrow and compact, Snowflake
+can easily check at the metadata level itself where that data is missing. In a sense, it can simply
+ignore these micro-sections because it knows that there is no data there, and this is easy to verify
+because the date ranges are narrow —a consequence of the fact that data naturally comes in small
+groups. Before we delve any further, I want to take a few seconds to tell you something important.
+If you are in a senior position on an engineering team, such as VP of Engineering, Director, Senior
+or Principal Engineer, SRE, Platform Engineer, or even Architect, then you really have nowhere to
+learn. Because all training platforms are designed for those just starting their careers and are
+mostly focused on interviews; and a systems design for an interview is just a short 45- minute
+analysis of the problem. But it is impossible to build an industrial-grade system based only on such
+knowledge. So, if you’ve been struggling to find a place for senior engineers and are n’t sure where
+to spend your company’s annual budget for training and development, you’ll probably like the Algorok
+platform. The link to it is in the description of this video. This is the platform we are currently
+building. It will feature in-depth tutorials on system design, ways to learn software architecture,
+AI-based architecture overviews, downloadable diagrams, and advanced engineering guides. But besides
+the platform, there is also something more practical. I teach a 12-week course on real-time systems
+design and architecture several times a year . We work together on real productive systems,
+architecture reviews, and large-scale cases. There is of course a long queue for this live group
+now, as we can only accept 15 engineers per stream. So, if you need immediate access to the
+recordings of the previous stream, you can simply enroll in this self-paced program for just $800.
+And, as I mentioned, you can get compensation from your company's research and development budget.
+You will find everything: free resources, platform access, and recruitment information on algor.io.
+The link to this is in the description of this video. Now let's get back to the video. So, a few
+sections ago we established that a table in Snowflake is just a list of files. So if you keep the
+old lists, you are actually keeping the old tables. And every time your list changes, Snowflake
+keeps the old version for 1 day by default and up to 90 days in higher versions. This means that if
+you want to query the past, you don't need to restore a backup. If you query a table as it existed
+yesterday at 4:00 PM, Snowflake simply reads yesterday's version of the metadata. And since the
+underlying files never actually changed, because as you recall, the files are stored as
+micropartitions in S3. So these files are still in the repository in the same state as they were. We
+only made changes at the metadata level. And this is the same idea behind the undrop table command.
+Deleting a table does not immediately remove the data from Snowflake. It removes the current
+metadata that points to it. And as long as an older version of that metadata exists, Undrop simply
+rebuilds the pointer and the table appears almost instantly. So, as we see, all of this happens at
+the level of the metadata itself. And data in object storage almost never changes. So the situation
+is that Snowflake doesn't need to create backups, snapshots, and point-in-time restores as separate
+systems. And, as you know, most databases implement them as separate systems. But Snowflake gets all
+of this thanks to an architectural solution of keeping data separate and doing everything else at
+the metadata level. This same mechanism also makes cloning almost free. Imagine you want to get a
+full copy of your 100 terabyte production storage to test a risky migration in a traditional
+database. This means copying 100 terabytes of data, which requires hundreds of hours of work and
+another 100 terabytes of storage where you copy all that information. But in Snowflake, it's really
+just one command called clone. After all, in Snowflake, nothing is actually copied. Snowflake simply
+creates a new version of the metadata. That's all. And that metadata now points to the same
+immutable files stored as micropartitions in object storage. And the worksheet and its clone simply
+use the same storage. But if at some point this data changes, only then will Snowflake write new
+files for the changed data. Until then, both tables continue to read the same micropartitions. This
+is the concept of " copy-on- write", but applied to the entire data store. And if you've seen my
+video about the design of the Replit system, you're already familiar with this idea. Replit uses "
+copy-on- write" to create snapshots of AI agent sandboxes in milliseconds. Snowflake here applies
+the same principle to databases of hundreds of terabytes. And the result is something that used to
+be incredibly expensive. But now each team can have their own full clone for testing without copying
+any production data. So far we've only talked about storage, but a data warehouse also needs compute
+power, because someone has to execute your SQL queries, do joins, aggregations, and return results.
+In Snowflake, these calculations take place inside what is called virtual storage. Virtual storage
+is a cluster of machines that executes your requests; they come in “ T-shirt-like” sizes from XS to
+6XL and launch in seconds. They automatically pause when idle. They are automatically renewed when a
+request is received, and payment is charged per second. The features that make all of this
+possible—like auto-pause, auto-start, and per-second billing— are based on the same concept we
+talked about in this video: this virtual storage doesn't actually store anything. The data is
+actually still in S3, it's just a layer of virtualization on top of it. So, you can stop the storage
+while a query is running: you will only lose the query itself, but you will not lose any bytes of
+data, because the data was never there . Thus, separating computation from data solves one of the
+oldest problems in working with data warehouses. You can run an ETL pipeline on one repository,
+business dashboards on another, and data analysis tasks on a third; they all read the same data but
+do not compete for the same processors. In traditional data warehouses, all workloads share a single
+compute cluster, making them interdependent. So, if a heavy ETL task is being performed , it will
+slow down the dashboards, and any spontaneous analytical queries will interfere with scheduled
+reports. But Snowflake works completely differently. He doesn't try to plan these workloads more
+intelligently. It simply gives each workload its own computing power. So even with a sudden spike in
+demand, such as on Monday morning when hundreds of analysts start running queries, the storage can
+automatically expand to multiple additional clusters. And when they finish, it can shrink back to
+its original size. So, with this architecture, capacity doesn't need to be planned weeks in advance,
+and elasticity isn't some special feature. The size is simply adjusted according to changing demand.
+So the system simply grows and shrinks with demand. Now, you're probably asking yourself some
+questions. I mentioned that all data is stored in S3. But S3 latency is high compared to local disk.
+The data is far away, which means S3 is much slower than a local SSD. So how does Snowflake deliver
+high performance? The answer actually has four levels. The first answer is to read less. This is the
+cutoff we saw earlier, when out of 50,000 micropartitions we only got 200 based on metadata. This
+discarded 99% of the table before execution even began . So their philosophy is that the fastest
+read is the one you never have to do, because you remember that you never actually read data from
+the micropartitions. You have done all the filtering at the metadata level itself. OK. The second is
+to read more narrowly. Files are columnar by nature. So if your query only concerns, say, three
+columns out of 300, Snowflake reads only those three columns from the remaining 200 files . So, from
+50,000 files, you went down to 200 files. And out of those 200 files, you're not looking at 300
+columns, you're looking at just three columns, which significantly reduces the amount of work.
+Third—read locally. Each storage node in Snowflake has a local SSD where frequently accessed data is
+cached, and this cache is distributed using consistent hashing. So each file naturally belongs to a
+single node, instead of being duplicated across the entire cluster. And when the storage warms up,
+most reads happen directly from the local SSD, with S3 serving only cache misses. And fourth,
+sometimes Snowflake doesn't read anything at all. Snowflake keeps a cache of results. So if you run
+the same query and the data hasn't changed, the response is instantly returned from the cache. The
+repository doesn't even need to start processing the request. So these are four different patterns
+and four different methods that they use, but they combine them together. This way, you do all four
+at the same time. And once you do, you can work with data that is far away, but at speeds close to
+local. So basically these four techniques or methods put together provide great results in
+Snowflake. But one question remains. We learned that virtual storage is constantly scaling up and
+down. So what happens to all the cached data when the cluster size changes? The obvious answer is
+cache rebalancing. Let's say you're increasing your virtual storage from four nodes to eight. Then
+all you need to do is redistribute the cached files so that each node gets the cache size it needs.
+True? But the problem is that this is exactly the moment when you don't want to move terabytes of
+data over the network, because this is when you scale out because the storage is already loaded.
+Therefore, Snowflake does not perform cache rebalancing at all. So, in Snowflake, if you want to
+change the size, you just transfer ownership. So only the ownership changes immediately, and the
+cached data is moved later. And this data is moved as queries naturally read and then cache the
+files according to their new destinations. Therefore, resizing becomes a gradual transition instead
+of a mass data migration. In the research paper they wrote, they call this lazy sequential hashing.
+Now there is another challenge. Even if the data is perfectly distributed , the work may not be
+perfectly distributed. One node may be slower due to a " noisy neighbor", a slower SSD, or a
+temporary lack of resources. And Snowflake doesn't wait for that node to catch up. Once the other
+node completes its own work, it begins processing the remaining files that were assigned to the
+slower node. So the workload is balanced dynamically, request by request. At this point, we have
+covered storage and computing. But none of them understand or know what a table is in Snowflake. The
+storage layer only knows about those immutable files with micropartitions. And the computational
+layer, which we discussed in the previous section , only knows how to execute these queries. But
+something still needs to keep track of which files belong to which tables, which version of those
+tables is current, who has access to them, and which repository should execute the query.
+Essentially, we need a " brain," and that's the job of Snowflake's cloud services layer. This is a
+multi-tenancy service that operates continuously for all customers. Therefore, every request goes
+through it. It parses SQL, builds an execution plan, cuts out unnecessary files, what we talked
+about—reducing the number of files from 50,000 to 200 using metadata alone, remember? The same
+example. It schedules tasks on virtual storage , ensures security, and coordinates transactions. So,
+the cloud services layer is, in essence, the control panel for the entire system. Now , we've talked
+quite a bit about metadata and all the incredible things we can do with it . And I mentioned that
+Snowflake stores file lists, table versions, truncation statistics, and transaction status as
+metadata. Essentially, every feature we've discussed so far depends on this metadata. They are so
+important to Snowflake. But where are they actually stored? They are not in S3. S3 is great for
+storing immutable data files in object storage. But metadata, as you know, is constantly changing.
+Every transaction updates them, and every query depends on their sequential reading . Therefore,
+Snowflake stores them in a completely different system. It is called Foundation DB. This is a
+distributed transactional key-value store. So think of it as a database under a database . So, the
+database, as you know, is S3. This is where Snowflake stores everything. But Foundation DB is a
+database under a database because it stores all the metadata about that data. When you commit, the
+micropartitions are already written to S3. We know this. But committing does not change these files.
+It only updates metadata. So if you change a record in Foundation DB, you are changing the table
+from one version of the file to another in micropartitions. So, a transaction in Snowflake doesn't
+actually move data. It only moves pointers, and the pointers are stored in this Foundation DB. The
+data itself is actually here, in the object store. And that's exactly how transactions work in
+Snowflake. As you know, in transactions there is the concept of "commit", and the data here is
+already securely written to disk by the time of commit, and " commit" simply makes it visible.
+Committing doesn't touch the data at all here. It only updates the metadata in the Foundation DB. So
+one record changes in the Foundation DB, and the new table now points to the new version of the file
+list. The thing is that Apple acquired Foundation DB in 2015 and discontinued its distribution. So
+Snowflake was already using it to run its metadata layer, as you can see here. So for the next three
+years they simply maintained their own internal copy of the Foundation DB until they made it public
+again in 2018 . So, Snowflake looks like a giant data warehouse, but it's actually two systems
+working together. One is a massive object store of immutable data, and the other is a small
+transactional database that coordinates all this information. A great way to understand how it all
+works together is to trace a single query through the entire Snowflake architecture. OK. Imagine
+that a request comes to the cloud services layer. It is analyzed, planned, and optimized, and tens
+of thousands of files are reduced to a few hundred using metadata alone. This plan is sent to the
+virtual repository . Cached data comes from the local SSD. But if cache misses occur, they are
+pulled from S3. Each node processes its share of files, and if one node lags behind, the others take
+over its work. The entire result is returned, cached, and then sent back to the client. This entire
+system was a virtual repository , launched specifically to fulfill your request. And after a few
+minutes, this storage will pause its work, and you will only pay for the seconds when you were
+executing these specific requests. You didn't actually change the data, and much of the processing
+happened at the metadata level itself. So Snowflake didn't have to process a lot of data for you.
+What's also impressive is that Snowflake didn't have to access a single index throughout this entire
+journey. The system did not have to modify any data files, and the calculations remained completely
+separate from the storage. Now I'll digress a bit and talk about something else , about technology.
+But these are interesting things. On September 16, 2020, Snowflake raised $3.4 billion in the
+largest software IPO in history. The shares were valued at $120, and on the first day their price
+reached $254. By the end of the first day, the company was worth about $70 billion, and Berkshire
+Hathaway had invested about $730 million in it. It was the first offering of new shares that
+Buffett's company had bought since Ford in 1956, and by the end of the first day, the stake was
+worth about $1.5 billion. As an engineer, why should you care about this? Because it's actually
+interesting to see what exactly the market was buying. The market evaluated not just a database,
+because there are many of them. In fact, he was appreciating architecture . Snowflake can provide
+per-second billing because the computing power is genderless and disposable. And Snowflake has
+elastic scaling because the data is stored elsewhere—on S3. So what I'm trying to say is that if you
+just tweak the architecture a little bit, we can probably build a billion- dollar company.
+Snowflake's architecture is elegant, but as you know, any architecture we choose has its tradeoffs.
+In the case of Snowflake, every architectural decision they made moved complexity elsewhere.
+Immutable files make reading easier, but at the same time make writing expensive. Separating storage
+from compute makes data stores disposable, but it also means that each request requires a network
+transition that has to be hidden by caching and clipping. Removing indexes simplifies the storage
+engine, and eventually workloads requiring point-of-care search forced their return in the form of
+search optimization and hybrid tables. So, removing indexes simplifies the storage engine, but to
+compensate for their absence, search optimization and hybrid tables for point queries had to be
+implemented later. Now let's talk about the biggest compromise : Snowflake's storage tier is
+extremely simple. These are simply immutable S3 objects in the form of micropartitions in S3. But
+the metadata level is not simple at all. He performs so many tasks. It handles transactions,
+cloning, time travel queries, truncation decisions, access rights checks, and all of this is done
+using a single small database —Foundation DB, which coordinates all data and metadata with object
+storage. OK. So, there are five things you can implement into your own systems right away. First,
+architecture follows economics. Moving computation to data made sense when networks were slow. But
+today's networks are different. So the architecture changed, and every rule you inherit was
+optimized for someone else's constraints. So, you might overestimate it. Snowflake made one
+decision— never modify data, and this gave Snowflake time travel, zero-copy cloning, and snapshot
+isolation. Great architectures allow one solution to solve many problems at once. The third thing we
+can learn is to make data simple and metadata smart. You remember that transactions are just pointer
+updates, and clones are just copies of pointers. Therefore, the complexity is transferred to a small
+metadata level, which makes large-scale operations very, very cheap. Fourth, elasticity begins with
+statelessness. If a computing system is stateless, it can appear and disappear at any time. This is
+what makes per-second billing and independent scaling possible. And fifth: architecture is a
+strategy. Competitors can copy your features, but it's much harder to copy the architectural
+solutions that made those features possible. That's why, if you want to fully stand out in the
+software industry , you need a deeper understanding of architecture. And that is why the Algoroth
+platform exists. Check it out today. The link is in the description. So the main lesson here is that
+Snowflake didn't create seven independent functions. She simply made two architectural decisions ,
+from which the remaining seven functions emerged. Time travel, cloning, undrop, snapshot isolation,
+elastic storage, per-second billing, marketplace—all of these features are separate, but they are
+related because they stem from two solutions: separation of storage and compute and prohibition of
+file modification. So, all of these seven great features are actually consequences of these two
+architectural decisions . This is the real lesson: architecture is not about following best
+practices. It's about optimizing for the modern economy, and there is no best design for everyone.
+The best one is the one that best fits your constraints. Creating such in-depth analyses requires a
+lot of work, especially research, processing information, and visualizing it in these charts. So be
+sure to subscribe to this channel and don't forget to like and share this video. And see you in the
+next video.

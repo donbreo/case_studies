@@ -1,0 +1,441 @@
+In January 2011, Reddit served over a billion page views in a single month. Reddit's engineering
+team consisted of only a dozen people and was small enough to fit around a single desk. And how such
+a small team managed such a large site is explained by several system design decisions the team
+made. In this video, we'll walk through their entire architecture and look at all the decisions they
+made along the way. And also now they are rebuilding their architecture and we will look at that as
+well. And if you look at this on a larger screen , we can look at all the text in more detail. Now
+we will look at seven things. First, the surprisingly simple data model that powered Reddit for
+years , and the tradeoffs that simplicity created. Second, why did Reddit treat growth as a fact to
+be recorded, rather than an answer to be calculated ? Third, the ranking system that made Reddit's
+main page possible on a large scale. Fourth , how Reddit updated the rankings and feed without
+constantly rebuilding them from scratch. Fifth, how Reddit handled situations where there wasn't
+enough data to confidently decide what should be ranked first. Sixth, we look at the caching
+architecture, which delivered a significant portion of Reddit's traffic and became one of the most
+important parts of this entire system. And finally, a giant Python monolith called R2, inside which
+all this ran, and a multi-year project, which is still ongoing, by the way, to strangle it with
+Golang services behind the GraphQL front door. This video is intended for backend engineers,
+platform engineers, or anyone who manages services with high read volume or has derived data that
+must remain correct. Almost everything in this video is taken from Steve Huffman's early talks about
+scaling Reddit, Reddit's own engineering blog, the R2 codebase they opened up, and the ranking
+algorithms we'll cover in this video are public code and you can read it. I simply researched all
+the publicly available information and compiled it into these charts. So this is going to be a very
+visual video. So stay tuned, because the most important scaling trick Reddit used wasn't a database,
+cache, or queue. It was hidden inside the ranking algorithm, and it's really interesting, and I want
+to explain it to you. So let's look at this. The first thing to understand is Reddit traffic,
+because once you see how the site was used, Reddit's architecture will make a lot more sense. On any
+community site, a small percentage of users create content. A slightly larger portion votes for it,
+while the vast majority of users do nothing. They just read the content. Experts call this the 1%
+rule. And on Reddit, the skew is as extreme as it gets. And the correct way to visualize this
+traffic is in the shape of a triangle or pyramid. At the top is a thin group of people who send
+links and write comments. Below them is a wider group of people who cast all the votes. And
+underneath it is a huge mass of people who do nothing but read posts, for example, refresh the main
+page, open a topic, and scroll through. which shows where the tricky problem was for Reddit. The
+difficult problem is not to record what the vertex of the triangle did, because new facts rarely
+emerge. That's only 1%. In fact, it served the bottom of the pyramid instantly over and over again
+throughout the day. Reddit looked at their workload and realized they were dealing with two very
+different types of data. Reddit made a distinction or division in its data, and everything Reddit
+has done since then follows from that one distinction. They decided that fact is what the user does.
+It is small. It's cheap to record. It needs to be accurate because if you miss someone's comment,
+they'll notice. Then the answer is what the site shows you. This could be a rating, a comment tree,
+or a karma number. Therefore, answers are expensive to create. They are read all the time, and they
+don't have to be perfect. They just have to be ready. Therefore, Reddit treated them in a completely
+different way. Facts were recorded at the time they occurred, but responses were formed based on the
+facts in advance and stored, meaning essentially every entry in every sort order for every
+subreddit, regardless of whether anyone asked for it . When Steve Huffman talked about scaling
+Reddit, this was his main lesson. And here's how he explains it. The key to speed is to pre- impute
+and cache everything. And Reddit didn't apply this idea selectively. He actually used it everywhere.
+You are essentially creating and storing results that no one can ever query, in all possible
+variations. Reddit's response was that wasting disk and memory is fine , but wasting the reader's
+time is not the best idea. And there is a rule that binds the two sides. When a new fact arrives,
+the expensive work of updating the answers happens later , when no one is waiting. So they use Q to
+achieve this. So they call it the "write now, fix later" rule. And this one rule explains the
+mechanism of their voting, their entries, their comments, all of that. So, let's start with the
+facts, that is, how Reddit keeps things separate. Reddit's data model is known for its simplicity.
+For years, the core of the site essentially ran on two tables for each type of object, namely a
+things table and a data table. The table of things was a skeleton. For links, it contained the
+properties of each link and each list, sorted by attributes such as the ID, the number of up and
+down votes, the date it was created, and whether or not it had been deleted. Essentially, if you
+look at it, these are all the columns that the user has requested information on. So, that's all.
+This is how they kept it. Everything else about that link, such as the title, URL, author,
+subreddit, didn't get its own column. All this entered the data table in the form of rows of key-
+value pairs. For example, one line defines the title, another defines the URL of the link, and so
+on. And this whole table is just the value of the thing's key identifier. So this is a small key-
+value store attached to postgress. Now these weren't just links. Everything on Reddit was stored
+this way. Comments were things, subreddits and accounts were things. Even the relationships between
+them, such as the fact that you voted for this post, were stored in the same style of the two
+tables. So we just stick to one storage form for every object on the site, repeated for every type,
+and that one form came with a rule that Reddit had adopted earlier that there would be no unions
+between types. So the application never asked the database to attach a comment link to the vote, and
+as long as nothing was attached, each type could exist on its own database cluster. So links could
+be on one set of machines, comments on a separate cluster, and votes, of course, the largest type on
+the site got a cluster to itself so we could isolate and develop them separately, because as we
+discussed, votes have a much larger volume than comments and links. Here's what I want you to
+understand. Most companies are sharding after users or after customers, like Jira or Slack do.
+Reddit is sharable by type, and the no- join rule made that possible. Now, if you notice, there's
+not one thing going on here. We don't ask the system to rank the front page, pass comments, or
+summarize karma scores, because those aren't facts. As I mentioned, these are answers. This is a
+separate data type. And the answers, as we discussed, were already built somewhere else. And that's
+why such a primitive model works for one of the largest sites on the Internet, where the repository
+of facts has always been like a filing cabinet, because complex questions have never been answered
+by SQL queries . So why did they even build the model this way, because then adding a column to a
+large postress table was painful. This could register the table and lock everyone out while it was
+running. And Reddit's layout was constantly changing. They were actually always adding new features.
+So they created a data model that never needed a schema change. So if you want to add a new
+attribute to the links, you don't need to modify the table. You simply start writing the new key
+into the data table. If you've seen my video about Air Table, this will look a little familiar, but
+at the same time it's very different because Air Table allows you to create a diagram at runtime.
+And Reddit here did an older, simpler version of the same thing . And this was years before Air
+Table, but the idea was to achieve the same goal, which was to move quickly without having to do too
+many migrations. A key- value model like the one we just discussed sounds really good, doesn't it?
+But there is one nuance in this model . It is great for finding things by ID. For example, if you
+ask, give me the number of the thing 1 2 3 4 5, and you can just pull out its skeleton, then pull
+out the keys, and you're done. But it's terrible when you want to filter or sort by one of those
+keys. Imagine that you need all links where some attribute exceeds a certain value. In a regular
+table, it's just one index column and one query , right? But in this data model that Reddit created,
+these properties are not stored as regular columns. They are hidden inside the rows of the data
+table. So answering a question like: " Show me the posts with the highest score means additional
+joins, more work for the database, and less efficient indexing." So every time you ask a complex
+question about a data property, you pay for that flexibility. So Reddit compromised and changed its
+approach. The fields that governed the lists, such as rating, popularity rating, controversial
+rating, creation time, were too important to leave hidden in a flexible data table. These values
+​​were extracted and stored as indexed columns in the "things" table. In other words, you could say
+that the fields it sorts by live in a fast structured schema , but the fields it simply searches for
+remain in this flexible schema-less store. The circuitless design made it easier to add new
+features, but made certain queries very expensive. So Reddit paid this price only where flexibility
+mattered, and returned performance-critical fields to the traditional relational model. But even
+that wasn't enough to solve the real scaling problems they faced. Expensive lists weren't generated
+from live database queries every time someone loaded a page. They were seen as answers created in
+advance, stored, and continually maintained as new facts came in. And this meant that the next call
+did not provide an answer. It consisted of capturing each new fact without making the user wait.
+When you "like" something on Reddit, the site doesn't just stop and list everything that's affected
+by that vote. It does not recalculate the score or reorder each list in which the post appeared. And
+only after all this does it confirm your click. No, this doesn't happen on the scale of Reddit. This
+would mean performing expensive work millions of times a day while all the users continued to wait.
+Instead, Reddit split the operation into two. First, while you wait, it records the one thing that
+absolutely needs to be recorded, which is the fact that you voted. So you get a confirmation here,
+and then it moves the task to a queue, which is essentially a "rabbit and question" and has been for
+years, and immediately control returns to your browser. From your perspective, the voting is
+complete, but the answers have not yet been touched. If you've used Reddit, you know that voting
+affects a lot of things, like scores, rankings, lists, and everything else like karma. So all these
+things that depend on voting are updated later by background workers. So, Reddit has recorded the
+fact that this vote took place, but the correction of the answers, that is, essentially, the score,
+the lists, the karma, all of this will happen in the background. And all of this is ultimately
+agreed upon, because for the vote count, a small delay is perfectly acceptable. And there is another
+detail that is being overlooked. The account displayed on Reddit is not necessarily the one Reddit
+actually uses. For years, Reddit has intentionally blurred the number shown to users by adding a
+small amount of noise. The goal was simple. Make it harder for someone running vote-rigging
+campaigns to determine whether their votes had an impact or not. So internally Reddit kept the real
+score, while externally it showed some approximate value. Now this decision reveals something
+important about the system. The rating had to be correct, as the ratings depended on it, and the
+number displayed on the screen had to be fairly close to it. So, the same basic facts, but two
+different answers and two different standards of correctness. So if recording the vote was cheap,
+what happened to all the expensive work that was done afterwards? This is where the “write now, fix
+later” approach comes into play. Voting “yes” is not just one change. It actually spreads throughout
+the system. Steve Huffman estimates that one vote triggered approximately 20 updates. The post's
+rating has changed, its position in the hot lists has changed. Perhaps its position on the "top of
+the week" or "controversial" list has also changed. The author's karma has changed and several
+cached answers have become stale. So the task in the queue did not increment the counter. It was a
+new fact that came in, and every answer that depended on it changed. So first we separated the facts
+into their own personal prompts, and then a workflow pool pulled those tasks from the prompts and
+fixed each affected answer in the background . And by this time the user has actually moved on. So,
+the main engineering detail here is that instead of using one giant queue, you use several different
+specific signals , because now workers are less likely to fight for the same popular post at the
+same time, which reduces competition for locks and makes the system much cleaner. And, of course,
+this design only works under one condition. One vote now translates into about 20 recordings. And
+that's a great compromise when reads exceed writes by a huge margin. You spend a little more work
+processing a rare right in the system, so that millions of future reads become almost free. But if
+you change the traffic pattern and make writes as common as reads, the conics will completely
+reverse and every user action will turn into 20 database updates and this whole architecture will
+start working against you. So Reddit was not optimized for systems with high write volume. It was
+simply optimized for a system where millions of people would read, relatively few people would vote
+, and almost no one would write. And such a system, such a compromise pays off . But by the time the
+next reader refreshed the page, the answers had already been fixed and ready for service. So now
+let's look at how the ranking works. So far, I've said that Reddit stores answers, not rebuilds
+them. And this only works if those answers remain correct while stored. Reddit made this possible
+thanks to one surprisingly clever solution. This is the rating formula itself. And this formula is
+public, as Reddit has now published it open source. And its assessment is simply two components
+added together. The first measures popularity using the logarithm of the post's rating, while the
+second measures when the post was submitted. Reddit takes the timestamp of a post and measures it in
+seconds since its own epoch, which began in December 2005 , and divides it by 45,000. Now, when you
+add those two together, you get the post's ranking. Now that number 45,000 seems arbitrary. This is
+not true. It is actually a conversion factor between popularity and time. And once you understand
+that, two really important things fall out of this formula. First the logarithm is 10. Now, every
+time the estimate increases by a factor of 10, the logarithm increases by exactly one. And since the
+timestamp is divisible by 45,000, adding 1 to the logarithm has exactly the same effect on the final
+rating as adding 45,000 seconds to the timestamp. So, 45,000 seconds is about 12 1/2 hours. So
+multiplying a post's rating by 10 gives it exactly the same ranking boost as increasing it by 12 1/2
+hours. This is why people sometimes describe Reddit votes as time travel. A vote doesn't literally
+move a post in time, but mathematically it has the same impact on rankings. And going from 10 to 100
+does the same thing . But notice what happens as the score increases. Once a post already has 1,000
+votes, adding another one hardly changes the logarithm. From a ratings perspective, that extra vote
+is only worth about 20 seconds. Early voices determine the trajectory of publication. Later voices
+have almost no effect on her. So now let's see what the timestamp does. Because 45,000 seconds
+equals 12 1/2 hours. A post that is 12 1/2 hours older needs a 10x increase in score to simply die
+with a newer post. After another 12 1/2 hours, she needs another 10x magnification. And this is
+Reddit's freshness mechanism . So Reddit doesn't have a background process that constantly deletes
+old posts, and there's no scheduled task that recalculates the rating every minute. Newer posts
+simply start with an advantage, while older posts have to earn significantly more votes to stay
+where they are. But there is a second consequence of this formula. Now, if you look at the formula,
+you will also see the publishing time. So it's not the current time, it's the submission time. And
+this difference between the time of publication and the current time is easy to miss. But that's
+what the formula really depends on. Nothing in this formula changes simply because time has moved
+forward. Now compare that to something like hacker news. In hacker news, a post's rating
+consistently declines with age. And even if no one votes, his rating changes every second . Reddit
+doesn't work like that. Once a post is sent, the timestamp never changes. The only input that
+changes is the rating, which means that the only time Reddit ever had to recalculate a post's rating
+was when someone voted. So when a vote comes in , Reddit recalculates the rating, stores the new
+value, and leaves it completely unchanged until the next vote. So, it's all an architectural
+decision. And this formula works because it depends on the time of sending. If it depended on the
+current time instead of the time it was sent, every saved list would become incorrect within a few
+seconds, and then it would have to constantly rebuild its responses, and the whole architecture we
+discussed would simply not work. Now let's look at how lists work through this formula. So, in the
+previous section, we just saw that the rating of a post is just a stored number that only changes
+when someone votes, and the list is now just a sorted set of those numbers. So the cached list is
+not the rendered HTML page. This is not even the result of a database query. Simply store a sorted
+list of verified IDs, each with a corresponding sort value. So when a vote comes in, Reddit doesn't
+ask Postgress to rebuild the list. The background handler opens the saved list, finds the post,
+moves it to a new position, and writes the list back. The question has already been answered, and
+Reddit did not list the answer. He was just supporting her. The same thing happens when someone
+sends a new post. Instead of waiting for someone to visit a subreddit, Reddit immediately determines
+where the post belongs in each subreddit list, such as hot, new, top, top of the week, top of the
+year, controversial. So, in total, there are about 15 different sort orders, and each one is created
+in advance and saved. Reddit calls this collection of pre- computed lists a persistent cache, and it
+resides in Cassandra, which the database designed for just this kind of workload. This is
+denormalized data , accessed almost entirely by key on a massive scale . Now there's another design
+solution that makes all of this practical. Lists are limited. The older version of Reddit didn't
+allow you to browse pages beyond about a thousand posts in a list. It wasn't because the pagination
+was complicated. This was because the saved response simply stopped there. By setting a hard limit
+on each list, Reddit also set a hard limit on the amount of data it had to store. This way, storage
+remained predictable, maintenance work remained predictable, and each update had a known upper
+limit. So the list was not an infinitely growing result of the query. It was a product with a
+specification, and that specification had an upper limit of, say, a thousand records. So when you
+opened r/ programming and sorted by popularity, nothing was ranked at that point. The ranking has
+already taken place, the list has already been compiled. Each vote and each new post simply moved
+the saved answer to its current state . So the page you were viewing has already been completed.
+Now, a list like r/ all, which aggregates posts from across the site, would be incredibly expensive
+to rebuild for every query. And these are exactly the answers that Reddit wants to keep in memory,
+ready to display. So, we understood how the ranking works and how the lists work. But there's
+another thing that's a little more complicated, and that's comment trees. The thing is, comments are
+not a flat list. They are a conversation. Answer to answer to answer. So structurally, if you think
+about it, it's actually a tree. So each comment actually stores the post it belongs to and the
+comment it was replying to. And from these two links you can reconstruct the entire ramified form of
+the discussion. But think about what happens when you try to display this in real time. A popular
+topic can have tens of thousands of comments, deeply nested, that can be sorted in various ways. And
+to walk through this entire tree, sorting each level on every page load for every reader in real
+time, would be extremely expensive. Do you remember the triangle or traffic pyramid that I showed
+you at the beginning? Many more people read the topic than comment on it. So Reddit took the same
+step as it did for lists. The assembled tree was processed as a response, which is the second data
+type I told you about , and they started storing that in Cassandra. So the new comment was a fact.
+It was recorded and the background task was queued. The worker then picked it up and split it into a
+saved tree in the background. Readers received the tree already assembled, and the expensive
+construction of the tree happened on the sidelines when no one was blogging about it . And this tree
+has reached its limits, and you see it on Reddit even today in a huge thread with tons of comments.
+Reddit doesn't give you the whole tree. It simply gives you the most popular comments and then gives
+you a " Load More Comments" button. So even something like a comment tree that Reddit processes as a
+response is pre- computed and stored in memory. Even something like this might be too large to ship
+in one piece. So Reddit starts sending them in parts. And this is roughly the same solution that we
+saw in the voting, and the same as in the list, where you now write down the fact and then correct
+the answer or create an answer. But determining the order of comments in this tree is a completely
+different problem than ranking posts, and Reddit solves it using completely different math. Posts
+and comments may look similar. These are things that people vote for, but Reddit treats them
+differently because they solve different problems. Publications try to respond to what is
+interesting now. The comments try to answer which answer is actually the best. Therefore, Reddit
+does not rank them using the same algorithm. The default comment sorting is the best and does not
+use the hot ranking formula we covered earlier. He simply uses statistics. And if you use Reddit
+today, you 'll see that the default comment order is still the best. Here is a problem that the
+formula we considered earlier cannot solve. Now imagine two comments. The first has one vote "for"
+and no votes " against". So he is 100% positive. And the second one has 300 votes "for" and 100
+"against." So that's 75% positive. So, which one do you think should get the higher rating? If you
+look at percentages alone, the first comment wins because it has 100%. So it's actually very
+misleading because only one person liked it. 400 people rated the second comment, and despite some
+disagreement, 3/4 of them still approved it. So intuitively the second comment is much more
+reliable. But the problem is not the percentage, but the sample size. TED did not attempt to assess
+how positive the comment was. He was trying to gauge how confident he should be in this assessment.
+So that's a completely different question. The solution came from statistics published in 1927, and
+it is called the Wilson confidence interval. It was introduced on Reddit by Randall Monroe, the
+creator of XKCD. And here's how it works. You should treat every comment as a survey. The votes you
+saw are just an example of how the entire Reddit community might vote if everyone read this comment.
+So instead of ranking comments by observed approval levels, rank them by the lowest approval level
+that the data can confidently support. A comment with one upvote has a huge margin of error. His
+lower confidence limit is low, so he stays further down the page until more evidence comes in. A
+comment with hundreds of votes has a much narrower confidence interval, so its lower bound is much
+closer to the actual approval level. And the algorithm naturally bothers with tiny samples and
+rewards comments that have survived a large number of votes. Now, there is another wonderful
+property hidden in this coincidence . Let's say Reddit is wrong. Let's say a great comment starts
+off lower than it deserves. But because it has so little data, its confidence interval is still
+wide, and as soon as people start voting for it, the estimate gets skewed , the lower bound quickly
+increases, and the comment goes up. The ranking system now automatically adjusts as new evidence
+becomes available. So notice that there is another difference from the ranking algorithm we just saw
+earlier. Time doesn't really matter here. Unlike posts, comments don't disappear simply because
+they're old. A brilliant answer posted hours after everyone else can still become the best comment
+if the votes support it. So Reddit got two ranking algorithms , built on two completely different
+philosophies. Posts are ranked by popularity, weighted by time. Comments are ranked by statistical
+validity. So none of these algorithms is better than the other. It's just that they both solve
+different problems. And that's also a great lesson we can learn here: don't reuse the same algorithm
+everywhere. Choose an algorithm that fits the question you are actually trying to answer. Now, if
+you want to delve deeper into Wilson's scoring statistics, Ivan Miller's article "How Not to Sort by
+Average" is one of the best technical guides you'll find online. Now we'll look at how Reddit
+actually processes all this pre- computed data at scale. So before we dive in, I want to take a few
+seconds to tell you about the cohort I host every few months. It is called the Alvaro cohort. We
+look at advanced system design and architecture for a post- AI world. Typically, people who attend
+the classes are senior engineers such as SRRES, platform engineers, principal engineers, enterprise
+and solution architects, and vice presidents of engineering. So there are people with work
+experience ranging from 5 to 26 years. And it's a great way to learn from real-world examples from
+production. So I would like to visit the algorok.io website, which is called algor.io, and look at
+the topics that we are going to cover. We will look at modern systems such as how Anthropic handles
+LMS, how Hugging Face handles so many sandboxes for AI models, and how AI together hosts so many
+open source models at large scale. It's 12 weeks long and each session is quite intense. Now, if you
+like these topics, I want you to fill out the form that opens when you click the "Reserve" or " Sign
+Up" button at the top. After you fill out the form, I will check if you are a good fit and we will
+arrange a call with you . The live cohort that I personally teach costs around $2,400, but there is
+a huge waiting list because I can only take a few people and I only take this cohort when I have
+time after my full-time job. The recommended way is to access pre- recorded sessions. It's only
+$800. And it's very easy to get a refund from your company. Now , if you are early in your career
+and new to engineering, this cohort may not be very relevant to you. So, you don't need to fill out
+a form. Good. Now let's get back to the video. If you remember, I said that the answers come from
+the Reddit cache. But let's see how it actually works. Because on Reddit, the cache is n't just
+another layer in front of the database. This is actually the architecture of reading. It starts
+right on the periphery. For years, if you weren't logged in , your Reddit page often would n't come
+from Reddit at all. It came from a CDN. Non-logged-in visitors, the largest group of readers, could
+receive the exact same copy of the page. So for these users, the ready-made answer was already on
+the periphery, and the request didn't even reach the Reddit application servers. Now, as soon as the
+request reached the application, it went into another layer of caches. Reddit had more than one
+memcache cluster. He had several. One of them kept a permanent MAC. Another kept outdated copies.
+The other stored long-lived cached objects. Another one stored distributed locks. And in front of
+them all sat the MC- Router, Facebook's memcache routing proxy, which decided which cache each
+request should be directed to. By the time the request reaches Postgress, it has already gone
+through several attempts to avoid contact with the database. Reddit took this caching philosophy
+very seriously. It even cached negative responses. Now suppose Reddit needed to answer the question:
+has this user already voted for this post? If the answer was "yes", caching is obvious. But Reddit
+also cached the "no" answer. This meant that confirming that a user did not vote became as fast as
+confirming that they did vote. Now think about how often this question is asked for every post, for
+every user, on every page load. Now, caching of missing data eliminates millions of unnecessary
+database lookups. Two of these cache pools are worth looking at even more closely, as they capture
+patterns you will see in many large distributed systems. The first was the outdated cache. Sometimes
+you shouldn't expect a completely fresh answer. If a downstream service was slow or unavailable,
+Reddit intentionally served an older version. So, from Reddit's perspective, "outdated but
+immediate" is always better than " fresh but unavailable." And this is consistent with everything
+we've discussed so far. Reddit viewed " freshness" as something that could be sacrificed under load.
+This is a deliberate sustainability strategy. The second was the lock cache. Imagine that a popular
+ad is finally expiring and 10,000 users request it almost simultaneously. Now, without coordination,
+all 10,000 queries can decide to rebuild the same list at the same time, taking turns overloading
+the database, and this is called a cache stampede. Reddit avoided this by using so-called
+distributed locking. I have a video about this on my channel. So, one request rebuilt the response
+while all the others either waited briefly or received an outdated copy. The database only paid the
+cost of the rebuild once. And by this time it had become abundantly clear that caching was not
+simply a performance optimization imposed on the architecture. It was architecture itself. The CDN
+served entire pages. The cache served saved responses. And the "outdated" cache traded "freshness"
+for accessibility. The lock cache protected the database from a massive leak, and Postgress stored
+the facts. This means that caches served responses, and responses are what users actually viewed,
+which makes this a good point to understand since everything we've looked at so far was still inside
+one huge Python program. So let's talk about that huge program I was talking about. It is
+essentially called R2. This is a monolith. Reddit actually started as a lisp program, and it was
+written in Python in the early stages. And R2 is this Python monlet. So it's just one massive code
+base that contains things like lists, ranking, caching logic, all of that. And the same code is sent
+to each server, and the configuration defines the role of each server. For example, one server will
+serve pages, while another will work through a queue. Now they moved all of this to AWS in 2009,
+being one of the early adopters of S3 for things like thumbnails, and a monolith like R2 has powered
+Reddit for over a decade. And the reason is that one codebase is actually easy to maintain, easy to
+deploy because everything is in one place at the same time. But at the scale and size of the Reddit
+team, one giant shared codebase becomes a bottleneck. Every team editing the same thing starts to
+become a problem. So Reddit is actually moving away from the R2 monolith, and they've been in this
+process for a few years now. They didn't stop the work and start rewriting it, because that's always
+a bad idea . But they did it using the “fig strangler” pattern. Now , with the "fig- suppressor"
+pattern, you don't completely destroy the entire system. You build a new one around it and direct
+more and more traffic to the new parts, letting the old code shrink until there's nothing left.
+Around 2017, Reddit started migrating clients to GraphQL. This is an API where the client requests
+exactly the fields they want. And for several years, all of their applications used GraphQL. Now I
+have a video dedicated specifically to GraphQL if you want to understand how it works. So be sure to
+check it out on the channel. Then, in 2021, they adopted something called GraphQL Federation. So
+instead of one giant API, you get one supergraph up front that is stitched together from many
+smaller subgraphs behind it. The client sends a request to the supergraph, and the supergraph
+determines which subgraph owns each field and routes accordingly. And this is what allows you to
+break the monolith. Starting in 2022, Reddit began building new GraphQL subgraphs in Golang for core
+parts of the website. Things like subreddits, comments, and voting had their own subgraphs. So each
+new subgraph gains ownership of one part of the graph, gradually replacing the corresponding part of
+R2. So for a while, both systems would exist side by side, with some requests being answered by the
+Python monolith, others by the new Goland services. And from the customer's point of view, nothing
+changes. GraphQL aggregates the response into a single API. So migration is almost invisible. If you
+watched my video on developing the Slack system, this architecture will probably be very similar.
+Now, it's the same general pattern. Keep existing code running while gradually developing
+specialized services around it. But this is where migrations start to get a little more complicated,
+as the first problem they encountered was traffic. The GraphQL federation specification did not
+allow Reddit to gradually move queries from the monolith to the subgraph. So there was no built-in
+way to send 1% of traffic to Golang services and watch the error rate, then slowly increase it or
+instantly roll everything back if something went wrong. So Reddit had to create this traffic
+movement layer on its own. But the more difficult problem was not the routing, but the actual data.
+Imagine you built a nice service without Golang , and it still reads from the same Post tables and
+Cassandra clusters as the monolith. You have n't really shared anything. You just moved the
+connection, and the connection, instead of being at the application level, is simply at the database
+level; and the data layer is actually much more difficult to disentangle . And so breaking the
+monolith is not about APIs , it's about ownership, like who owns this table, who owns this data, who
+can change it? And answering these questions, and then moving the data securely, is a job that takes
+years. Now, anyone who has worked on a monolith knows that this is the really tricky part, which
+begs the question: did you just replace one giant monolith with dozens of smaller services? How do
+you prevent these services from becoming the next monolith? And for this, Reddit uses templates ,
+and Reddit calls it a baseplate. So, this is their application to the common capabilities of the
+service, such as how it is built, how it interacts with the infrastructure, how it interacts with
+other services. And the reason for this is quite important. If there are 100 microservices, and each
+one is unique and different from each other, they are a nightmare to work on. 100 services that are
+not very unique, but look very similar, i.e. have the same workflow for Postgress, Cassandra, memach
+and signals , as well as exactly the same observation patterns. Now these services are much easier
+to use, and the underlying platform makes hundreds of services manageable, not chaotic. This is what
+Reddit's architecture looks like now. The GraphQL supergraph is located ahead. Behind it, the R2
+monolith is gradually shrinking, still responsible for some parts that have not yet been
+transferred. And around it is a growing collection of Bolang services. They are all built on the
+same baseboard, all speak the same operating language, and all connect to the same Postgress,
+Cassandra, memach, and message signals that we learned about in this video. So, to put it all
+together, we'll trace a single page request through Reddit's transitional era architecture, where
+the old and new systems still work side by side. So, you open the subreddit and click on the
+discussion thread. Your application sends a single GraphQL request to the supergraph. The supergraph
+actually breaks this request into parts and forwards each part to the service to which it belongs.
+Some fields are returned from the new Golang subgraphs, others are still returned from R2, and you
+don't really notice the difference. Now we need to get the subreddit list back , and as we learned,
+the list is not ranked on demand. It is already in a persistent cache inside Cassandra and is a
+sorted list of ping IDs whose ranking only changes when someone votes, and from there Reddit starts
+updating individual posts. Most of this data is usually stored in Postgress, but in practice a
+significant portion of it never reaches Postgress at all because it is already in memcast pools
+behind the router. And once we've uploaded the posts, we need to upload the comments. And the
+comments come not as individual lines from Reddit, but as a tree of comments already assembled with
+each response ordered by the Wilson credibility rating we looked at earlier. Now, when you click the
+upvote button on a comment, the vote registers one new fact and queues the task , and your screen
+immediately starts displaying the number of votes, which was intentionally blurred. From your
+perspective, the operation is complete. But behind the scenes, the work is really just beginning. A
+background worker takes this task and starts correcting each answer affected by the vote. For
+example, comment ratings, their position in the rating, user karma, cached lists, cached comments.
+So everything that depends on this new fact is corrected. So the next person who loads that page
+gets a response that has already been updated. This is the pattern you saw throughout the video.
+Almost nothing was calculated for this query while you were waiting, and the answers already
+existed. The only thing that was created synchronously was one new fact, and everything else
+actually happened afterwards in the background. So the next reader never had to pay the same price.
+Now there are a few ideas we can take from this video and use in our own system designs. First,
+separate the facts from the answers. So you keep the part that records the facts tiny, synchronous,
+and accurate. While everything else that users actually view—like feeds, ratings, comments, karma—is
+simply a response derived from these facts . Therefore, you will need to create these responses in
+advance, store them, and correct them asynchronously whenever a new fact arrives. Second, design
+your derived data so that it remains valid while it is still there. Reddit's ranking formula only
+changed when someone voted. Time alone never invalidates a saved rating. And that's why the lists
+could be pre- computed, rather than rebuilt for each query. Third, save the answers , don't
+rearrange them. The Reddit list wasn't rebuilt from scratch every time someone visited. This was a
+stored response that background workers were constantly correcting, and these responses were
+intentionally limited. The old version of Reddit was stopping about a thousand posts. So the
+repository remained predictable, and each patch had a known upper limit. Fourth, decide how correct
+each answer actually needs to be . Some answers had to be exact, others close. The internal score
+that determined the rating had to be correct. Whereas the rating displayed to users is intentionally
+blurred. So fresh answers are ideal, but stale answers are also acceptable under load. Fifth, it's
+matching the algorithm to the problem, and in this video we saw two algorithms. So posts were
+basically responding to what was interesting at the time, while comments were responding to what
+answer we could trust the most . So these are different questions, and different mathematics will be
+applied to both of them . Sixth, it's about treating caching as part of the architecture, not
+something you add on afterwards. So you serve anonymous traffic directly from the edge, and you cash
+in on negative responses like " no" so that "no" also becomes as cheap as "yes," and you protect
+expensive reorders with allocation locks. And cash stamps are not possible; they are actually
+inevitable, so you design with them in mind. And finally, when a monolith becomes too big to
+replace, don't replace it; replace it in parts, so we build rollback into the plan. And remember,
+moving queries is usually the easy part; untangling who owns the data takes years, and that is
+exactly the architecture we are breaking, found in the Algro cohort. We look at the engineering
+solutions that made these technologies work. So if this sounds useful, you'll find the details on
+alrog.io. The link is in the description. This is how a company with just a dozen engineers serves
+over a billion page views per month. If you enjoyed this in-depth review, I would really appreciate
+it if you subscribed, as the research behind these videos takes a lot of time and effort. Thanks for
+watching, and see you next time.

@@ -1,0 +1,196 @@
+In 2025, Stripe processed about $1.9 trillion in payments, up from $1.4 trillion in 2024. And every
+dollar of that went through the shared Ruby monolith, which is about 50 million lines of code and is
+the largest known Ruby codebase in existence, with hundreds of engineers running queries every day
+and 27,000 queries per second at peak times. It is interesting to note that all this traffic is not
+handled by a Golang microserver mesh, but by a Ruby monolith. This should completely surprise you
+because the entire industry playbook of the 2010s worked in reverse. Twitter moved from Ruby to
+Scala, and company after company was breaking up their monoliths and rewriting everything into
+microservices or changing their codebases to something that compiled and ran faster. Now Stripe has
+reached the same scale and the same pain, reading the same blog posts, but they made the opposite
+decision. So, the reason I'm personally interested in what Stripe is doing is because if you've been
+following this channel long enough, you know that I know a thing or two about Golang. And before
+that, I was a Ruby on Rails developer. And it was strange to me that someone still continued to work
+with Ruby and not Go. Now, everything we'll cover here is essentially an excerpt of what Stripe has
+documented in its engineering blog and its conference talks from the engineers who actually built
+this, as well as some public statements from the lead engineers who work at Stripe. And this video
+has two big parts: Sorbet type checking and Ruby FMT formatting. They are both completely open
+source. So, the code is right here for you to read and check out. And as you can see, I have a bunch
+of charts to help you visualize all this information that I found online. So make sure you stay
+until the end to understand why Stripe chose Ruby over something like Golang. So I'll tell you
+everything in one sentence, and then you can dedicate the rest of the video to the mechanics. Around
+2017, Stripe decided that the bottleneck was n't the language, but the codebase . And the code base
+is fixed using tools, not rewriting. And everything in this stack falls out of this one inversion.
+They took the budget that everyone else spends on migration and spent it on building the tools that
+Ruby lacked. So let's look at what was actually broken, and then what exactly they created to fix
+it. Now, the limitations of Ruby of this size are real and well known. It has a global interpreted
+lock. So one thread executes Ruby per process. So you don't get true parallelism in the process like
+in Golang. It is also dynamically typed. So a typo or missing method explodes at runtime when the
+client navigates to that path, not at compile time where the developer can detect it. It is also
+slower per operation than compiled language. And standard tools like formatters, test runners, code
+intelligence were built for medium codebases, not 50 million lines of code. So the usual reaction to
+our giant, hard-to-work-with Ruby monolith was to leave it and move the high-performance services to
+Golang, then write new code in Typescript, then break everything into microservices. Around that
+time, Twitter, LinkedIn, and many other companies did it. But Stripe asked a different question.
+They didn't ask what language we should use. They asked, what exactly makes working with this
+codebase difficult? And when they started thinking about it and processing this question, the
+answers were n't about language. They realized that it's hard to recruit new engineers because there
+are no types, and it's hard to refactor because there's no static analysis to tell you what you've
+broken into 3,000 files. It's also very slow to test because the package runs everything. And none
+of these things we just talked about need to be rewritten. They needed a toolkit for a 50 million
+line codebase, and Ruby never had that. So that's what Stripe engineers focused on to create a tool
+that was meant to exist. So, here is the full list of what they created. They created Sorbet, a
+custom static type checker that processes over 50 million rows in seconds. They then created a
+sample test execution that executes about 5% of the set and still detects the correct errors. Then
+they created the famous Ruby FMT, their own Ruby formatter written in Rust, because the standard one
+was too slow. They then created minions, which are their own AI coding agents trained on Ruby plus
+Sorb, as well as their own forks and patches of the Ruby runtime itself. Now each of them is a tool
+that should have existed but did n't. So let's see how each one falls out of one bet, starting with
+the largest. In untyped Ruby, which you see on the left in the diagram on the screen, types live in
+the programmer's head. There is nothing to check whether the object you pass to a method actually
+has the method you are calling on it. So you can type in the name of a method and Ruby finds it at
+runtime, usually in production. This is fine for a small Ruby on Rails application, but for 50
+million lines of payment logic, this is a class of error that should not be allowed to exist. The
+industry has now perfected types in dynamic languages like Typescript for JavaScript and hack for
+PHP, which is essentially incremental typing that you implement gradually. No one has done this for
+Ruby at a production scale. So Stripe is creating something called sorbet. Sorbet is a progressive
+static type checker for Ruby, written in seeps for speed and linear scaling across cores. It checks
+the entire code base of 50 million lines in seconds. Now engineers add types where they help and
+leave them where they do n't. And Sorbet detects inconsistencies that cross moral boundaries during
+editing, not in the production environment, which is essentially a feedback loop of a modern type
+language perfected in a language that no one thought was capable of supporting. Now, in one Sunday
+in March, Stripe converted 3.7 million lines of code in a single withdrawal request . This is the
+kind of mass refactoring that is virtually impossible in a dynamic codebase because you can't check
+if you've ripped off some files. But Sorbet managed one personal errand , and the next morning
+hundreds of engineers arrived, and everything continued to work. And this opportunity, fearless
+white refactoring of the codebase, is exactly what the Golang migration promised. They got all of
+this without migration, fixing what Ruby was lacking. That's half the performance, but types alone
+don't make a 50 million row monolith fast to work with. The next wall is testing, and this is where
+conventional wisdom comes in, and we'll get to that in a minute. Now, before we dive in, I just want
+to take a few seconds to tell you about a cohort that I personally train 15-20 senior engineers
+every few months, and it's called the Algorok cohort. We look at advanced system design architecture
+for a post-AI world, and typically the people who attend are senior engineers like SRRES, platform
+engineers, principal engineers, enterprise and solution architects, and VPs of engineering. So there
+are people with experience ranging from 5 to 26 years, and it's a great way to learn from real
+production case studies . The next cohort will be in July. So I wanted to go to the website
+ww.algq.kg.oq.io and look at the topics that we are going to cover. We will look at modern systems
+such as how Anthropic handles LMS, how Hugging Face handles so many sandboxes for AI models, and how
+AI co-locates so many open source models at large scale. This is a 12-week intensive program, and if
+you like the topics, you can fill out the form that opens and click the Reserve or Register button
+at the top. After you fill out the form, I will check if you are a good fit and we will arrange a
+call with you . The live cohort , which I personally teach, costs about $2,400. And if you just want
+access to pre-recorded videos, it's around $800. If you are currently at the beginning of your
+career and starting out in engineering, this cohort may not be of interest to you. Therefore, please
+do not fill out the form. In a monolith with hundreds of daily commits, it is impossible to run a
+full package for every change . This takes hours, and hours of continuous integration (CI) latency
+stalls the team. The standard fixes microservices. You split the codebase, so each service has a
+small set, and you only run what you touched. This is the main reason why people break up into
+lists. But Stripe abandoned this and instead created selective text execution. It uses the Sorbet-
+based static analysis we talked about earlier. So they already had it. So, to calculate exactly
+which tests might be affected by a certain change, you change the method. It tracks each subscriber
+and the subscriber of each subscriber and runs only those tests that are relevant to that subgraph.
+On average, this is about 5% of the entire set, and you get the same security as running the correct
+tests without the delay of running all of them. This way, you get all the benefits of continuous
+integration of microservices without any of the network limitations, deployment complexities, or
+debugging of distributed systems that microservices actually entail. So you can see a pattern. The
+limitation they imposed on themselves forced the creation of a more complex infrastructure, and
+sorbet was the foundation on which it was built. Now Ruby actually has two different problems at
+scale that pull in opposite directions. The first was performance, which made the codebase easy to
+navigate and refactor, and the second was performance, which made the runtime fast enough for the
+workload. Sorbas solves the performance problem, but has no effect on speed. Therefore, a completely
+separate set of tools was needed for productivity. OK. Ruby here slows down with something called JL
+or global interpreter locking. Standard Ruby has the same locking as standard Python. It's pretty
+simple. In a single Ruby process, only one thread can run Ruby code at a time. You can run a whole
+bunch of threads, but they don't really work together. They take turns. So, if you have a 16-core
+machine, these threads still can't distribute Ruby across all 16 cores. One process gives you about
+one Ruby course running at a time, and that's the GIL. This is a real problem for payment because
+payment has a lot to do and not much time to do them. It needs to detect fraud, authenticate the
+user, authorize the charge, and update the registry. And part of that is real computing, not just
+waiting for some other service. Threads within the same process cannot run all of these at the same
+time. So Stripe didn't try to fix Ruby's streaming. They bypassed her. The idea is to move
+parallelism to a higher level, from threads to processes. So instead of one process running many
+threads, you run many separate Ruby processes, and each one handles requests on its own core. Load
+balancers and orchestration distribute the work between them all. And anything that really needs to
+run in parallel, like background jobs, Q- processors, and workers, is completely pushed out of the
+main query path to systems that aren't Ruby at all. The charging path itself has been described by
+Stripe's chief engineer as the most latency-sensitive and business-critical system at Stripe, and it
+runs synchronously on Ruby, with hundreds of developers working on it. Now the lack of built-in
+parallelism is addressed at the architecture level, not at the language level. So that's the
+discipline they followed. Productivity and performance were different issues, and they created a
+targeted toolchain for each, rather than resorting to one straightforward tool that tried to solve
+both of these issues together. Now, after a certain scale, the boring infrastructure that every
+engineer takes for granted stops working. The formatter is becoming too slow. The package manager is
+suffocating from the dependency graph. The tester doesn't know what to skip. Editor tools like
+autocomplete, jump to definition, and link search all start to fail. So Stripe redesigned those
+parts. The best example here is Ruby FMT. They rewrote Ruby's automatic formatter in Rust because
+the existing ones couldn't keep up with it , and it runs an order of magnitude faster because at 50
+million rows you can't afford a slow formatter. And they followed the same story for their build
+system, dependency management, and code discovery. Every toolkit that mattered on their scale, they
+began to change. Now the newest element they have created is called minions. These are AI- based
+coding agents in the Stripe development environment that run asynchronous tasks to resolve one-off
+errors and features. They had to build them themselves because commercial coding agents mostly learn
+TypeScript, Python, and Golang. Ruby plus Sorbet is so rare that off-the-shelf tools performed worse
+on the Stype codebase than those trained on their own stack. So this is a threshold that most
+engineers don't see. At a certain scale, your problems become too specific, your codebase becomes
+too large, and your stack becomes too sparse for the open source community to build tools that meet
+your needs. And Stripe actually crossed that line many years ago. Now, beyond that point, tools stop
+being something you accept and become a supporting infrastructure that you maintain forever because
+no one else will. And it's actually getting stronger because every time Stripe has hit a wall,
+they've invested in tools to overcome it. So, Sorbet pushed back the typing wall. Selective test
+execution pushed back the CI wall, and Ruby FMT pushed back the developer tools wall. Minions pushed
+the AI ​​wall apart, etc. And each of those investments makes the next one easier to justify,
+because the codebase you're investing in is one you've already invested decades of tools into. Now
+let's look at the trade-offs, because as senior engineers, we can't miss them. The bet that Stripe
+engineers made was expensive, and it wasn't easy to notice. First, production-level type checking is
+several years of compiler work. Secondly, the selective test engine based on static analysis is a
+separate multi-year project. And third, rewriting the formatter in a second language like Rust is an
+effort that no normal company would justify. They had to hire the people who built Monorreo tools at
+Google and Facebook because almost no one was building infrastructure of this scale. And it also
+comes at the cost of generality and onboarding, because the Ruby-specific infrastructure, plus their
+codebase, plus their workflow, means that every year of Sorbet is another year of Sorbet to
+maintain, and every layer of custom tools is another layer that has to keep working. Now their
+codebase is tightly coupled to the toolchain in such a way that reversing this process is expensive.
+If they ever decided to leave Ruby, they would be migrating decades of custom tools and
+institutional knowledge of how they work, not just the codebase. Now there are also ongoing costs,
+not just one-time ones, because GIL means careful parallel engineering at the process level forever,
+and sorbet means that every gem, which is essentially a dependency in Ruby, must be annotated with a
+type or explicitly marked as untyped. The third selective test execution means that the module
+dependency graph should remain clean enough for tracing. So they didn't get the Ruby savings for
+free when they had to pay attention to it forever. But the bet that Stripe’s engineer made paid off,
+because $1.9 trillion in 2025 on a codebase that everyone thought should have been rewritten a
+decade ago is a big win. They turned what looked like a structural flaw into a complex asset, and
+they couldn't get any faster at rewriting. So they got better by just building tools around it. So
+don't look at Stripe and conclude that monoliths are simple, but understand the engineering it took
+to make this monolithic architecture work. So there are five lessons we can take away from this
+video, the first being that rewriting is almost never the solution. So when someone says we need to
+rewrite all of this in Golang, it usually means we need to fix the tooling around that codebase. So
+the next time someone tells you that we've outgrown this programming language, ask them what exactly
+is so difficult about it. Is this typification? Is it refactoring or testing speed ? Because these
+are tooling problems, and migration is actually an expensive way to solve them. Second, you need to
+invest in tools that make things more difficult . So, Sorbet didn't just solve the typing problem.
+It made it possible to perform tests selectively. The 3.7 million row migration was made possible by
+Sorbet, and it actually made the minions useful. So don't ask if this solves today's problems , but
+ask if it makes solving the next 10 problems in the future much easier. Third , you need to separate
+performance issues from performance issues, because on the surface they look the same, but one is
+navigation, refactoring, types, tests, and the other is parallel execution latency. So you have
+different bottlenecks for both of these problems. So you have different tools for both of these
+tasks, and mixing or confusing them with each other results in you writing or rewriting an entire
+stack just to fix a slow test suite that could have been fixed with a better toolkit. Fourth, and
+this is important, is that at a certain scale, the open source ecosystem stops working for you. So
+your stack becomes too unusual, your codebase becomes too large, and the tooling stops being
+something you accept and becomes something you have to own and start building yourself. Fifth, a
+boring choice made over a decade is superior to an exciting choice made over only two years. So
+everyone who rewrote with Ruby spent years without releasing a product to do so. Stripe developed
+Ruby and strengthened the tooling around it. And a compelling decision trades a short-term sense of
+progress for a long-term sense of loss of momentum. Okay, so let's summarize. Stripe's story with
+Ruby is one decision that involves investing in tooling instead of rewriting the language, and
+everything is connected to that. So, they created sorbet for typing, selective test execution for
+continuous integration (CI), Ruby FMT for formatting, minion for AI coding, and process-level
+parallelism for GIL, and then developed custom runtime developers for what wasn't optimized
+upstream. The most important lesson is that rewriting has been the default engineering solution for
+the past decade, and its most common result has been years of migrations that resulted in under-
+optimization, while companies that were actually increasing their codebase resisted rewriting the
+codebase and built tools that their stack lacked. Stripe is one of the best examples, but other
+companies like Shopify and GitHub have also made their own versions. Reading and processing all the
+engineering documentation that companies like Stripe produce, and then converting it into these
+diagrams, takes a lot of time and effort . So please don't forget to subscribe to this channel and
+make sure you like this video, share this video with your friends, and see you next time.
