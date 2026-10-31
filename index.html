@@ -4,7 +4,7 @@
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<meta name="theme-color" content="#eff5f1">
-	<title>Case Studies | Fieldnotes</title>
+	<title>Case Studies &amp; QnA | Fieldnotes</title>
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap" rel="stylesheet">
@@ -76,6 +76,19 @@
 
 		.brand-name { font-size: 15px; font-weight: 700; letter-spacing: 0; }
 		.brand-caption { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+
+		.library-switch { display: grid; gap: 4px; margin-top: 20px; }
+		.library-button {
+			padding: 8px 10px;
+			text-align: left;
+			color: var(--muted);
+			background: transparent;
+			border: 1px solid var(--line);
+			border-radius: 3px;
+			cursor: pointer;
+		}
+		.library-button:hover { background: var(--paper); }
+		.library-button[aria-pressed="true"] { color: var(--green); background: var(--green-soft); border-color: var(--green); }
 
 		.search-wrap { position: relative; margin: 23px 0 26px; }
 		.search-wrap::before {
@@ -291,17 +304,22 @@
 </head>
 <body>
 	<div class="shell">
-		<aside class="sidebar" aria-label="Case study navigation">
+		<aside class="sidebar" aria-label="Library navigation">
 			<div class="brand">
 				<div class="brand-mark" aria-hidden="true">F</div>
 				<div>
 					<div class="brand-name">Fieldnotes</div>
-					<div class="brand-caption">Systems case studies</div>
+					<div class="brand-caption">Systems &amp; design questions</div>
 				</div>
 			</div>
 
+			<div class="library-switch" role="group" aria-label="Choose library">
+				<button type="button" class="library-button" data-library="systems" aria-pressed="true">Systems case studies</button>
+				<button type="button" class="library-button" data-library="qna" aria-pressed="false">System design QnA</button>
+			</div>
+
 			<label class="search-wrap">
-				<span class="sr-only" hidden>Filter case studies</span>
+				<span class="sr-only" hidden>Filter documents</span>
 				<input id="search" type="search" placeholder="Filter documents" autocomplete="off" aria-label="Filter documents">
 			</label>
 
@@ -317,13 +335,13 @@
 
 			<article class="reader" aria-live="polite">
 				<header class="doc-header">
-					<p id="eyebrow" class="eyebrow">Case study library</p>
+					<p id="eyebrow" class="eyebrow">Document library</p>
 					<h1 id="title">A closer look at the systems behind the interface.</h1>
-					<p id="description" class="doc-description">Choose a case study or source transcript to begin reading.</p>
+					<p id="description" class="doc-description">Choose a case study, source transcript, or system design question and answer to begin reading.</p>
 					<div id="actions" class="doc-actions"></div>
 				</header>
 				<div id="content">
-					<p class="status">Loading the case study library…</p>
+					<p class="status">Loading the document library…</p>
 				</div>
 				<div class="footer-note">Documents are rendered from the files in this workspace.</div>
 			</article>
@@ -344,6 +362,9 @@
 		const eyebrow = document.querySelector("#eyebrow");
 		const actions = document.querySelector("#actions");
 		const crumb = document.querySelector("#crumb-current");
+		const libraryButtons = [...document.querySelectorAll("[data-library]")];
+		let activeLibrary = "systems";
+		let documentLoadId = 0;
 		let activePath = "2026-09-29_paypal_fraud_detection/paypal_fraud.md";
 
 		if (window.mermaid) {
@@ -363,9 +384,13 @@
 			});
 		}
 
+		function libraryDocuments() {
+			return documents.filter(doc => activeLibrary === "qna" ? doc.group === "QnA" : doc.group !== "QnA");
+		}
+
 		function renderNavigation(filter = "") {
 			const query = filter.trim().toLowerCase();
-			const filtered = documents.filter(doc => `${doc.group} ${doc.title} ${doc.kind}`.toLowerCase().includes(query));
+			const filtered = libraryDocuments().filter(doc => `${doc.group} ${doc.title} ${doc.kind}`.toLowerCase().includes(query));
 			const groups = [...new Set(filtered.map(doc => doc.group))];
 
 			nav.replaceChildren();
@@ -423,6 +448,7 @@
 		}
 
 		async function loadDocument(doc) {
+			const loadId = ++documentLoadId;
 			activePath = doc.path;
 			renderNavigation(search.value);
 			title.textContent = doc.title;
@@ -440,6 +466,7 @@
 				const response = await fetch(doc.path);
 				if (!response.ok) throw new Error(`Could not load ${doc.path} (${response.status}).`);
 				const source = await response.text();
+				if (loadId !== documentLoadId) return;
 				content.replaceChildren();
 
 				if (doc.format === "text") {
@@ -472,12 +499,38 @@
 					await mermaid.run({ nodes: [...content.querySelectorAll(".mermaid")] });
 				}
 			} catch (error) {
+				if (loadId !== documentLoadId) return;
 				content.replaceChildren();
 				const message = document.createElement("p");
 				message.className = "status error";
 				message.textContent = `${error.message} You can still open the source file above.`;
 				content.append(message);
 			}
+		}
+
+		for (const button of libraryButtons) {
+			button.addEventListener("click", () => {
+				if (activeLibrary === button.dataset.library) return;
+				activeLibrary = button.dataset.library;
+				search.value = "";
+				for (const item of libraryButtons) {
+					item.setAttribute("aria-pressed", String(item.dataset.library === activeLibrary));
+				}
+				const firstDocument = libraryDocuments()[0];
+				if (firstDocument) {
+					loadDocument(firstDocument);
+				} else {
+					documentLoadId++;
+					activePath = "";
+					renderNavigation();
+					title.textContent = button.textContent;
+					description.textContent = "No documents have been indexed in this library yet.";
+					eyebrow.textContent = "Library";
+					crumb.textContent = button.textContent;
+					actions.replaceChildren();
+					content.replaceChildren();
+				}
+			});
 		}
 
 		search.addEventListener("input", () => renderNavigation(search.value));
@@ -502,7 +555,7 @@
 					throw new Error("The document catalog is empty or invalid.");
 				}
 				renderNavigation();
-				const initialDocument = documents.find(doc => doc.path === activePath) ?? documents[0];
+				const initialDocument = libraryDocuments().find(doc => doc.path === activePath) ?? libraryDocuments()[0];
 				loadDocument(initialDocument);
 			} catch (error) {
 				content.replaceChildren();

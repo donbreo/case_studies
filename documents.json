@@ -1,5 +1,13 @@
 [
 	{
+		"group": "QnA",
+		"title": "Build a Reliable LLM-Powered Document Extraction Endpoint",
+		"kind": "System design question and answer · Markdown",
+		"description": "Design an LLM-powered extraction API with structured validation, relational persistence, and resilient processing.",
+		"path": "system_design_qna/llm-doc-extract.md",
+		"format": "markdown"
+	},
+	{
 		"group": "PayPal fraud detection",
 		"title": "Fraud Detection Architecture",
 		"kind": "Architecture explainer · Markdown",
