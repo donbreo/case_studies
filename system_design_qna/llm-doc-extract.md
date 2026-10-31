@@ -61,7 +61,7 @@ Ensure that API responses do not expose secrets, internal credentials, or sensit
 
 ## 1. Proposed architecture
 
-I would implement this as an asynchronous document-processing pipeline, rather than keeping the HTTP request open while the LLM processes the document.
+The solution uses an asynchronous document-processing pipeline rather than keeping the HTTP request open while the LLM processes the document.
 
 Document extraction involves operations that can take several seconds or fail due to provider rate limits, timeouts, or transient errors. An asynchronous design makes those failures easier to handle and gives the client a reliable way to check the extraction status.
 
@@ -115,7 +115,7 @@ The important architectural decision is that the LLM is not trusted. Its output 
 
 ## 2. API design
 
-I would expose two primary endpoints.
+The API exposes two primary endpoints.
 
 ### Submit a document
 
@@ -220,7 +220,7 @@ Operational or processing failure — HTTP 500
 
 The response should not include raw provider errors, API credentials, internal stack traces, prompts, or unfiltered model output.
 
-I would use these status definitions:
+The solution uses these status definitions:
 
 | Status       | Meaning                                                                           |
 | ------------ | --------------------------------------------------------------------------------- |
@@ -314,7 +314,7 @@ However, JSON encoding and explicit instructions are not complete prompt-injecti
 | Sensitive information leakage | Never expose internal prompts, credentials, or raw provider responses         |
 | Excessively large documents   | Enforce upload, page, and token limits                                        |
 
-For additional confidence, I would require the LLM to return evidence snippets alongside extracted fields internally. The application can check whether those snippets actually appear in the extracted document text.
+For additional confidence, the LLM returns evidence snippets alongside extracted fields internally. The application can check whether those snippets actually appear in the extracted document text.
 
 For example:
 
@@ -331,7 +331,7 @@ This does not prove that the model interpreted the document correctly, but it ma
 
 ## 4. Structured output and schema validation
 
-I would use the provider's native structured-output or JSON Schema functionality where available.
+The solution uses the provider's native structured-output or JSON Schema functionality where available.
 
 However, provider-side structured output is not a replacement for application-side validation. The provider can return incomplete information, incorrect values, or responses that violate business rules.
 
@@ -399,7 +399,7 @@ export type ExtractionResult = z.infer<
 >;
 ```
 
-I would represent monetary amounts as decimal strings in the API and use PostgreSQL `NUMERIC` for persistence. This avoids JavaScript floating-point precision problems with financial values.
+Monetary amounts are represented as decimal strings in the API and stored as PostgreSQL `NUMERIC` values. This avoids JavaScript floating-point precision problems with financial values.
 
 ### Validate the LLM response
 
@@ -451,7 +451,7 @@ Business rules should be document-type-specific. For example, `subtotal + tax = 
 
 ### Bounded repair strategy
 
-I would separate output repair from provider retries.
+The solution separates output repair from provider retries.
 
 For example:
 
@@ -497,13 +497,13 @@ async function extractWithValidation(
 }
 ```
 
-In production, I would use a dedicated `OutputValidationError` rather than relying on generic JavaScript errors. I would also avoid returning raw validation diagnostics to clients.
+In production, the implementation uses a dedicated `OutputValidationError` rather than relying on generic JavaScript errors. It also avoids returning raw validation diagnostics to clients.
 
 If the repaired response remains invalid, classify the result as `INVALID` when the document itself is unusable or the extraction cannot be completed reliably.
 
 ## 5. Resilience and error handling
 
-The LLM provider is an external dependency. I would treat it as unreliable and isolate its integration behind a provider adapter.
+The LLM provider is an external dependency, so the solution treats it as unreliable and isolates its integration behind a provider adapter.
 
 For example:
 
@@ -580,7 +580,7 @@ This is a provider-neutral HTTP example. The request body should be adapted to t
 
 ### Retry strategy
 
-I would retry only transient failures.
+The solution retries only transient failures.
 
 | Error                  | Retry?         | Handling                           |
 | ---------------------- | -------------- | ---------------------------------- |
@@ -617,7 +617,7 @@ function calculateBackoff(
 
 For HTTP 429 responses, parse the provider's `Retry-After` header and prefer that delay over the calculated backoff.
 
-In a queue-based architecture, I would reschedule rate-limited jobs instead of keeping workers occupied while waiting. Retries should also have a global attempt limit and an overall job deadline.
+In a queue-based architecture, rate-limited jobs are rescheduled instead of keeping workers occupied while waiting. Retries should also have a global attempt limit and an overall job deadline.
 
 A circuit breaker can be added to temporarily stop new provider calls when the provider is consistently unavailable.
 
@@ -657,7 +657,7 @@ The cancellation operation should update the database status to `CANCELLED`. It 
 
 ## 6. Data persistence and relational modelling
 
-I would separate original documents, extraction jobs, and extraction results.
+The relational model separates original documents, extraction jobs, and extraction results.
 
 The original document should be stored in object storage rather than directly in PostgreSQL. PostgreSQL should store its metadata and storage reference.
 
@@ -741,7 +741,7 @@ CREATE INDEX idx_extractions_document_id
     ON extractions(document_id);
 ```
 
-I would also introduce an `outbox_events` table in a production implementation to coordinate database commits and queue publishing.
+A production implementation also introduces an `outbox_events` table to coordinate database commits and queue publishing.
 
 ### Why this structure?
 
@@ -763,7 +763,7 @@ There is an important failure scenario:
 
 The extraction remains `PENDING` but is never processed.
 
-I would solve this using the Transactional Outbox Pattern:
+The solution prevents this failure mode by using the Transactional Outbox Pattern:
 
 1. Create the document and extraction records.
 2. Insert an outbox event in the same PostgreSQL transaction.
@@ -865,7 +865,7 @@ async function processExtraction(
 }
 ```
 
-This is a simplified worker outline. In production, I would add cancellation subscriptions, processing leases, explicit error classification, queue retry policies, and transactional status transitions.
+This is a simplified worker outline. The production implementation adds cancellation subscriptions, processing leases, explicit error classification, queue retry policies, and transactional status transitions.
 
 The extraction result and `SUCCEEDED` status must be committed in the same transaction. Otherwise, a failed database operation could leave the system reporting success without a persisted result.
 
@@ -873,7 +873,7 @@ The extraction result and `SUCCEEDED` status must be committed in the same trans
 
 The LLM should not necessarily receive the uploaded file directly.
 
-I would have a document parser handle supported formats:
+A document parser handles the supported formats:
 
 - PDF: text extraction, with OCR for scanned pages.
 - DOCX: document text extraction.
@@ -887,7 +887,7 @@ One important distinction: because this is an asynchronous API, retrieving an ex
 
 The HTTP request to retrieve the resource succeeded; it is the background operation that failed.
 
-I would use this contract:
+The API uses this contract:
 
 | Operation/state                  | HTTP status     | Application status |
 | -------------------------------- | --------------- | ------------------ |
@@ -906,7 +906,7 @@ For `FAILED` and `INVALID`, the API should expose a stable error code and a safe
 
 ## 9. Operational considerations
 
-Beyond the basic implementation, I would account for the following:
+Beyond the basic implementation, the solution accounts for the following:
 
 Security and privacy
 
@@ -929,7 +929,7 @@ Reliability
 
 Observability
 
-I would track metrics such as:
+The system tracks metrics such as:
 
 | Metric                                | Purpose                    |
 | ------------------------------------- | -------------------------- |
@@ -944,7 +944,7 @@ I would track metrics such as:
 
 ## 10. Testing strategy
 
-I would explicitly test failure scenarios rather than only testing successful extraction.
+The testing strategy explicitly covers failure scenarios rather than only testing successful extraction.
 
 | Test case                           | Expected behaviour                     |
 | ----------------------------------- | -------------------------------------- |
@@ -965,11 +965,11 @@ I would explicitly test failure scenarios rather than only testing successful ex
 | Database failure during persistence | Do not mark extraction successful      |
 | Unauthorized extraction lookup      | Deny access                            |
 
-I would use mocked provider responses to simulate malformed, incomplete, and adversarial outputs. Integration tests should verify the complete lifecycle across PostgreSQL, the queue, object storage, and the provider adapter.
+Mocked provider responses simulate malformed, incomplete, and adversarial outputs. Integration tests verify the complete lifecycle across PostgreSQL, the queue, object storage, and the provider adapter.
 
 ## 11. Final design decisions
 
-The important decisions I would emphasize when presenting this solution are:
+The solution is based on these key design decisions:
 
 | Problem                   | Design decision                                                                      |
 | ------------------------- | ------------------------------------------------------------------------------------ |
